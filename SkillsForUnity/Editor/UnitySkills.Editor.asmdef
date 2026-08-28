@@ -16,7 +16,9 @@
         "Unity.RenderPipelines.Universal.Runtime",
         "Unity.RenderPipelines.HighDefinition.Runtime"
     ],
-    "includePlatforms": ["Editor"],
+    "includePlatforms": [
+        "Editor"
+    ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,
@@ -78,6 +80,11 @@
             "name": "com.unity.render-pipelines.high-definition",
             "expression": "[14.0.0,18.0.0)",
             "define": "HDRP"
+        },
+        {
+            "name": "com.unity.timeline",
+            "expression": "",
+            "define": "TIMELINE"
         }
     ],
     "noEngineReferences": false

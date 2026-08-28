@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿#if TIMELINE
+using UnityEngine;
 using UnityEditor;
 using UnityEngine.Timeline;
 using UnityEngine.Playables;
@@ -303,3 +304,4 @@ namespace UnitySkills
 }
 
 // Producer:Betsy
+#endif
