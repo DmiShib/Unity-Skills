@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -20,23 +20,12 @@ namespace UnitySkills
         // No USS rule needed; only consumed by Query() in RefreshPendingExpiry.
         private const string PendingExpiresClass = "perm-pending-expires";
 
-        // dropdown choices 与 SkillsOperatingMode 的位置一对一对应，避免依赖本地化文本做反查。
+        // The dropdown choices correspond position-for-position to SkillsOperatingMode, to avoid depending on localized text for reverse lookup.
         private static readonly SkillsOperatingMode[] _modeOrder = new[]
         {
             SkillsOperatingMode.Approval,
             SkillsOperatingMode.Auto,
             SkillsOperatingMode.Bypass,
-        };
-
-        // Same contract as _modeOrder: choice position maps one-to-one onto SurfaceProfileKind, so
-        // the reverse lookup never depends on localized text.
-        // (English on purpose — CollectUiCharacters scans this file for the baked font atlas, and
-        // new CJK in comments forces an atlas top-up. See the note above _russian in Localization.cs.)
-        private static readonly SurfaceProfileKind[] _profileOrder = new[]
-        {
-            SurfaceProfileKind.Full,
-            SurfaceProfileKind.Guide,
-            SurfaceProfileKind.NoSceneAuthoring,
         };
 
         private readonly VisualElement _root;
@@ -61,6 +50,10 @@ namespace UnitySkills
         private VisualElement _panelApprovalRow;
         private Toggle        _panelApprovalToggle;
         private Label         _panelApprovalHint;
+        private VisualElement _confirmRow;
+        private Label         _confirmLabel;
+        private Toggle        _confirmToggle;
+        private Label         _confirmHint;
         private VisualElement _pendingSection;
         private Label         _pendingTitle;
         private VisualElement _pendingList;
@@ -71,14 +64,29 @@ namespace UnitySkills
         private Button        _allowlistAddBtn;
         private Button        _viewAuditBtn;
 
+        // Tab Display group
+        private Label  _tabVisibilityTitle;
+        private Label  _tabVisibilityHint;
+        private Label  _tabVisibleSkillsLabel;
+        private Toggle _tabVisibleSkillsToggle;
+        private Label  _tabVisibleAiConfigLabel;
+        private Toggle _tabVisibleAiConfigToggle;
+        private Label  _tabVisibleUnityCliLabel;
+        private Toggle _tabVisibleUnityCliToggle;
+        private Label  _tabVisibleHistoryLabel;
+        private Toggle _tabVisibleHistoryToggle;
+        private Label         _tabVisibleAnalyticsLabel;
+        private Toggle        _tabVisibleAnalyticsToggle;
+        private VisualElement _rowTabVisibleAnalytics;
+
         // AI tools group
         private Label  _agentSyncGroupTitle;
         private Toggle _agentAutoSyncToggle;
         private Label  _agentAutoSyncHint;
+        private Toggle _agentInstructionToggle;
+        private Label  _agentInstructionHint;
 
-        private Label  _cliGroupTitle;
-        private Label  _cliHint;
-        private Button _cliOpenBtn;
+
 
         // Server group
         private Label           _serverGroupTitle;
@@ -100,22 +108,15 @@ namespace UnitySkills
         private Label         _runtimeGroupTitle;
         private Label         _loglevelLabel;
         private DropdownField _logDropdown;
-        private VisualElement _updateNotificationsSwitch;
+        private Toggle        _updateNotificationsToggle;
         private Label         _updateNotificationsLabel;
         private Label         _updateNotificationsHint;
-        private VisualElement _confirmSwitch;
-        private Label         _confirmLabel;
-        private Label         _confirmHint;
-        private VisualElement _telemetrySwitch;
+        private Label         _updateCheckLabel;
+        private Button        _updateCheckBtn;
+        private Label         _updateCheckStatus;
+        private Toggle        _telemetryToggle;
         private Label         _telemetryLabel;
         private Label         _telemetryHint;
-        private VisualElement _summaryTruncateSwitch;
-        private Label         _summaryTruncateLabel;
-        private Label         _summaryTruncateHint;
-        private Label         _surfaceProfileLabel;
-        private DropdownField _surfaceProfileDropdown;
-        private Label         _surfaceProfileHint;
-
         // Stats group
         private Label  _statsGroupTitle;
         private Label  _statsHint;
@@ -150,9 +151,10 @@ namespace UnitySkills
             ApplyCloseIcon();
             BindEvents();
             InitializeValues();
-            RefreshPermissionsUi();
+            RefreshLocalization();
 
-            // Shortcuts 节：独立控制器接管捕获态机与冲突检测，抽屉仅做组装与生命周期转发。
+            // Shortcuts section: a separate controller owns the capture state machine and
+            // conflict detection; the drawer only assembles it and forwards lifecycle events.
             _shortcutsController = new ShortcutsSettingsController(_drawerContainer);
 
             if (_drawerMask != null)
@@ -160,33 +162,26 @@ namespace UnitySkills
                 _drawerMask.RegisterCallback<ClickEvent>(_ => Close());
             }
 
-            // 权限状态由 SkillsModeManager 全局广播；订阅以同步抽屉 UI。
-            // 用 DetachFromPanelEvent 解绑，避免 EditorWindow 关闭后泄漏。
-            SkillsModeManager.OnChanged += RefreshPermissionsUi;
-            // The profile can also change outside the panel (EditorPrefs migration, test fixtures),
-            // so subscribe to keep the drawer showing the profile that is actually in force.
-            SkillsSurfaceProfile.OnChanged += RefreshSurfaceProfileUi;
             _root.RegisterCallback<DetachFromPanelEvent>(OnRootDetached);
+        }
 
-            // 倒计时每秒推进一次；ScheduleItem 跟随 _root 生命周期自动停止。
-            // 同时做权限状态快照对比 — OnChanged 信号若因后台窗口/事件循环延迟丢失，
-            // 这条 polling 兜底保证 Drawer 总能在 1s 内同步到最新 pending/granted。
-            // 经 EditorUiScheduler.RepeatSafe 把实际 mutation 推迟到 delayCall，避免落在
-            // repaint/generateVisualContent 期间触发 InvalidOperationException（issue #44）。
-            EditorUiScheduler.RepeatSafe(_root, 1000, TickPermissions);
+        public void Dispose()
+        {
+            SkillsModeManager.OnChanged -= RefreshPermissionsUi;
+            TabVisibilitySettings.OnChanged -= SyncTabVisibilityUi;
+            SkillTelemetryService.OnChanged -= SyncTabVisibilityUi;
+            VersionCheckService.CheckCompleted -= OnStableCheckCompleted;
         }
 
         private void OnRootDetached(DetachFromPanelEvent _)
         {
-            SkillsModeManager.OnChanged -= RefreshPermissionsUi;
-            SkillsSurfaceProfile.OnChanged -= RefreshSurfaceProfileUi;
         }
 
         private void ApplyCloseIcon()
         {
             if (_closeBtn == null) return;
-            // Unity 内置 winbtn_win_close 在不同版本/平台命名不一致，
-            // 直接用 Unicode × 更稳定，避免 "Unable to load the icon" 警告。
+            // Unity's built-in winbtn_win_close is named inconsistently across versions/platforms;
+            // using the Unicode × directly is more reliable, avoiding the "Unable to load the icon" warning.
             _closeBtn.text = "✕";
         }
 
@@ -203,6 +198,10 @@ namespace UnitySkills
             _panelApprovalRow    = _drawerContainer.Q<VisualElement>("row-panel-approval");
             _panelApprovalToggle = _drawerContainer.Q<Toggle>("perm-panel-approval-toggle");
             _panelApprovalHint   = _drawerContainer.Q<Label>("perm-panel-approval-hint");
+            _confirmRow          = _drawerContainer.Q<VisualElement>("confirm-row");
+            _confirmLabel        = _drawerContainer.Q<Label>("confirm-label");
+            _confirmToggle       = _drawerContainer.Q<Toggle>("confirm-toggle");
+            _confirmHint         = _drawerContainer.Q<Label>("confirm-hint");
             _pendingSection      = _drawerContainer.Q<VisualElement>("perm-pending-section");
             _pendingTitle        = _drawerContainer.Q<Label>("perm-pending-title");
             _pendingList         = _drawerContainer.Q<VisualElement>("perm-pending-list");
@@ -213,13 +212,26 @@ namespace UnitySkills
             _allowlistAddBtn     = _drawerContainer.Q<Button>("perm-allowlist-add-btn");
             _viewAuditBtn        = _drawerContainer.Q<Button>("perm-view-audit-btn");
 
+            // Tab Display group
+            _tabVisibilityTitle       = _drawerContainer.Q<Label>("group-tab-visibility-title");
+            _tabVisibilityHint        = _drawerContainer.Q<Label>("tab-visibility-hint");
+            _tabVisibleSkillsLabel    = _drawerContainer.Q<Label>("tab-visible-skills-label");
+            _tabVisibleSkillsToggle   = _drawerContainer.Q<Toggle>("tab-visible-skills-toggle");
+            _tabVisibleAiConfigLabel  = _drawerContainer.Q<Label>("tab-visible-aiconfig-label");
+            _tabVisibleAiConfigToggle = _drawerContainer.Q<Toggle>("tab-visible-aiconfig-toggle");
+            _tabVisibleUnityCliLabel  = _drawerContainer.Q<Label>("tab-visible-unitycli-label");
+            _tabVisibleUnityCliToggle = _drawerContainer.Q<Toggle>("tab-visible-unitycli-toggle");
+            _tabVisibleHistoryLabel   = _drawerContainer.Q<Label>("tab-visible-history-label");
+            _tabVisibleHistoryToggle  = _drawerContainer.Q<Toggle>("tab-visible-history-toggle");
+            _tabVisibleAnalyticsLabel = _drawerContainer.Q<Label>("tab-visible-analytics-label");
+            _tabVisibleAnalyticsToggle= _drawerContainer.Q<Toggle>("tab-visible-analytics-toggle");
+            _rowTabVisibleAnalytics   = _drawerContainer.Q<VisualElement>("row-tab-visible-analytics");
+
             _agentSyncGroupTitle = _drawerContainer.Q<Label>("group-agent-sync-title");
             _agentAutoSyncToggle = _drawerContainer.Q<Toggle>("agent-autosync-toggle");
             _agentAutoSyncHint   = _drawerContainer.Q<Label>("agent-autosync-hint");
-
-            _cliGroupTitle = _drawerContainer.Q<Label>("group-cli-title");
-            _cliHint       = _drawerContainer.Q<Label>("cli-drawer-hint");
-            _cliOpenBtn    = _drawerContainer.Q<Button>("cli-open-setup-btn");
+            _agentInstructionToggle = _drawerContainer.Q<Toggle>("agent-instruction-toggle");
+            _agentInstructionHint   = _drawerContainer.Q<Label>("agent-instruction-hint");
 
             _serverGroupTitle = _drawerContainer.Q<Label>("group-server-title");
             _autoStartToggle  = _drawerContainer.Q<Toggle>("autostart-toggle");
@@ -239,22 +251,15 @@ namespace UnitySkills
             _runtimeGroupTitle = _drawerContainer.Q<Label>("group-runtime-title");
             _loglevelLabel     = _drawerContainer.Q<Label>("loglevel-label");
             _logDropdown       = _drawerContainer.Q<DropdownField>("loglevel-dropdown");
-            _updateNotificationsSwitch = _drawerContainer.Q<VisualElement>("update-notifications-switch");
+            _updateNotificationsToggle = _drawerContainer.Q<Toggle>("update-notifications-toggle");
             _updateNotificationsLabel  = _drawerContainer.Q<Label>("update-notifications-label");
             _updateNotificationsHint   = _drawerContainer.Q<Label>("update-notifications-hint");
-            _confirmSwitch     = _drawerContainer.Q<VisualElement>("confirm-switch");
-            _confirmLabel      = _drawerContainer.Q<Label>("confirm-label");
-            _confirmHint       = _drawerContainer.Q<Label>("confirm-hint");
-            _telemetrySwitch   = _drawerContainer.Q<VisualElement>("telemetry-switch");
+            _updateCheckLabel  = _drawerContainer.Q<Label>("update-check-label");
+            _updateCheckBtn    = _drawerContainer.Q<Button>("update-check-btn");
+            _updateCheckStatus = _drawerContainer.Q<Label>("update-check-status");
+            _telemetryToggle   = _drawerContainer.Q<Toggle>("telemetry-toggle");
             _telemetryLabel    = _drawerContainer.Q<Label>("telemetry-label");
             _telemetryHint     = _drawerContainer.Q<Label>("telemetry-hint");
-            _summaryTruncateSwitch = _drawerContainer.Q<VisualElement>("summary-truncate-switch");
-            _summaryTruncateLabel  = _drawerContainer.Q<Label>("summary-truncate-label");
-            _summaryTruncateHint   = _drawerContainer.Q<Label>("summary-truncate-hint");
-            _surfaceProfileLabel    = _drawerContainer.Q<Label>("surface-profile-label");
-            _surfaceProfileDropdown = _drawerContainer.Q<DropdownField>("surface-profile-dropdown");
-            _surfaceProfileHint     = _drawerContainer.Q<Label>("surface-profile-hint");
-
             _statsGroupTitle = _drawerContainer.Q<Label>("group-stats-title");
             _statsHint       = _drawerContainer.Q<Label>("stats-hint");
             _statsResetBtn   = _drawerContainer.Q<Button>("stats-reset-btn");
@@ -267,7 +272,7 @@ namespace UnitySkills
         {
             if (_closeBtn != null) _closeBtn.clicked += Close;
 
-            // index 由 _modeOrder 反查为枚举，避免依赖本地化文本。
+            // The index is looked up back into the enum via _modeOrder, to avoid depending on localized text.
             if (_modeDropdown != null)
                 _modeDropdown.RegisterValueChangedCallback(evt =>
                 {
@@ -275,7 +280,7 @@ namespace UnitySkills
                     if (idx < 0 || idx >= _modeOrder.Length) return;
                     var target = _modeOrder[idx];
                     if (SkillsModeManager.CurrentMode != target)
-                        SkillsModeManager.CurrentMode = target; // setter 触发 OnChanged → RefreshPermissionsUi
+                        SkillsModeManager.CurrentMode = target; // The setter triggers OnChanged → RefreshPermissionsUi
                 });
 
             if (_panelApprovalToggle != null)
@@ -284,6 +289,27 @@ namespace UnitySkills
                     if (evt.newValue != SkillsModeManager.PanelApprovalRequired)
                         SkillsModeManager.PanelApprovalRequired = evt.newValue;
                 });
+
+            if (_confirmToggle != null)
+                _confirmToggle.RegisterValueChangedCallback(evt =>
+                {
+                    ConfirmationTokenService.RequireConfirmation = evt.newValue;
+                });
+
+            if (_tabVisibleSkillsToggle != null)
+                _tabVisibleSkillsToggle.RegisterValueChangedCallback(evt => TabVisibilitySettings.SetUserPreference("skills", evt.newValue));
+            if (_tabVisibleAiConfigToggle != null)
+                _tabVisibleAiConfigToggle.RegisterValueChangedCallback(evt => TabVisibilitySettings.SetUserPreference("aiconfig", evt.newValue));
+            if (_tabVisibleUnityCliToggle != null)
+                _tabVisibleUnityCliToggle.RegisterValueChangedCallback(evt => TabVisibilitySettings.SetUserPreference("unitycli", evt.newValue));
+            if (_tabVisibleHistoryToggle != null)
+                _tabVisibleHistoryToggle.RegisterValueChangedCallback(evt => TabVisibilitySettings.SetUserPreference("history", evt.newValue));
+            if (_tabVisibleAnalyticsToggle != null)
+                _tabVisibleAnalyticsToggle.RegisterValueChangedCallback(evt => TabVisibilitySettings.SetUserPreference("analytics", evt.newValue));
+
+            SkillsModeManager.OnChanged += RefreshPermissionsUi;
+            TabVisibilitySettings.OnChanged += SyncTabVisibilityUi;
+            SkillTelemetryService.OnChanged += SyncTabVisibilityUi;
 
             if (_allowlistClearBtn != null)
                 _allowlistClearBtn.clicked += () => SkillsModeManager.ClearAllowlist();
@@ -301,8 +327,21 @@ namespace UnitySkills
                         SkillInstallSyncService.Enabled = evt.newValue;
                 });
 
-            if (_cliOpenBtn != null)
-                _cliOpenBtn.clicked += () => UnityCliWindow.ShowWindow();
+            // Guide-line toggle: enabling writes the line to every installed tool right away,
+            // disabling removes it from every known instruction file again.
+            if (_agentInstructionToggle != null)
+                _agentInstructionToggle.RegisterValueChangedCallback(evt =>
+                {
+                    if (evt.newValue == AgentInstructionService.Enabled)
+                        return;
+                    AgentInstructionService.Enabled = evt.newValue;
+                    if (evt.newValue)
+                        AgentInstructionService.ApplyToAllInstalled();
+                    else
+                        AgentInstructionService.RemoveAll();
+                });
+
+
 
             if (_autoStartToggle != null)
                 _autoStartToggle.RegisterValueChangedCallback(evt =>
@@ -349,46 +388,22 @@ namespace UnitySkills
                         SkillsLogger.Level = (LogLevel)idx;
                 });
 
-            if (_updateNotificationsSwitch != null)
-                _updateNotificationsSwitch.RegisterCallback<ClickEvent>(_ =>
+            if (_updateNotificationsToggle != null)
+                _updateNotificationsToggle.RegisterValueChangedCallback(evt =>
                 {
-                    VersionCheckService.NotificationsEnabled =
-                        !VersionCheckService.NotificationsEnabled;
+                    VersionCheckService.NotificationsEnabled = evt.newValue;
                     SyncSettingSwitches();
                 });
 
-            if (_confirmSwitch != null)
-                _confirmSwitch.RegisterCallback<ClickEvent>(_ =>
-                {
-                    ConfirmationTokenService.RequireConfirmation = !ConfirmationTokenService.RequireConfirmation;
-                    SyncSettingSwitches();
-                });
+            if (_updateCheckBtn != null)
+                _updateCheckBtn.clicked += OnUpdateCheckClicked;
 
-            if (_telemetrySwitch != null)
-                _telemetrySwitch.RegisterCallback<ClickEvent>(_ =>
+            if (_telemetryToggle != null)
+                _telemetryToggle.RegisterValueChangedCallback(evt =>
                 {
-                    SkillTelemetryService.Enabled = !SkillTelemetryService.Enabled;
+                    SkillTelemetryService.Enabled = evt.newValue;
                     SyncSettingSwitches();
-                });
-
-            if (_summaryTruncateSwitch != null)
-                _summaryTruncateSwitch.RegisterCallback<ClickEvent>(_ =>
-                {
-                    SkillRouter.SummaryAutoTruncate = !SkillRouter.SummaryAutoTruncate;
-                    SyncSettingSwitches();
-                });
-
-            // Index is resolved back to the enum through _profileOrder. Writing
-            // SkillsSurfaceProfile.Current makes its setter raise OnChanged, which reaches
-            // RefreshSurfaceProfileUi and repaints the row, so no manual sync is needed here.
-            if (_surfaceProfileDropdown != null)
-                _surfaceProfileDropdown.RegisterValueChangedCallback(evt =>
-                {
-                    int idx = _surfaceProfileDropdown.choices.IndexOf(evt.newValue);
-                    if (idx < 0 || idx >= _profileOrder.Length) return;
-                    var target = _profileOrder[idx];
-                    if (SkillsSurfaceProfile.Current != target)
-                        SkillsSurfaceProfile.Current = target;
+                    TabVisibilitySettings.NotifyChanged();
                 });
 
             if (_statsResetBtn != null)
@@ -407,8 +422,8 @@ namespace UnitySkills
 
         private void InitializeValues()
         {
-            // dropdown 的 choices 用模式术语英文短名；不本地化（与 Claude Code 文档一致）。
-            // RefreshPermissionsUi 负责按当前模式 SetValue。
+            // The dropdown's choices use the short English mode terms; not localized (matching Claude Code's docs).
+            // RefreshPermissionsUi is responsible for the SetValue based on the current mode.
             if (_modeDropdown != null)
             {
                 _modeDropdown.choices = new List<string> { "Approval", "Auto", "Bypass" };
@@ -446,25 +461,45 @@ namespace UnitySkills
             if (_autoStartToggle != null) _autoStartToggle.value = SkillsHttpServer.AutoStart;
             if (_startOnLaunchToggle != null) _startOnLaunchToggle.value = SkillsHttpServer.StartOnEditorLaunch;
             if (_agentAutoSyncToggle != null) _agentAutoSyncToggle.value = SkillInstallSyncService.Enabled;
+            if (_agentInstructionToggle != null) _agentInstructionToggle.value = AgentInstructionService.Enabled;
             if (_timeoutField   != null) _timeoutField.value     = SkillsHttpServer.RequestTimeoutMinutes;
             if (_keepaliveField != null) _keepaliveField.value   = SkillsHttpServer.KeepAliveIntervalSeconds;
             SyncSettingSwitches();
-            RebuildSurfaceProfileDropdown();
             RefreshLanguagePins();
+            RefreshPermissionsUi();
+            SyncTabVisibilityUi();
+        }
+
+        private void SyncTabVisibilityUi()
+        {
+            _rowTabVisibleAnalytics.SetVisible(SkillTelemetryService.Enabled);
+            _tabVisibleSkillsToggle?.SetValueWithoutNotify(TabVisibilitySettings.GetUserPreference("skills"));
+            _tabVisibleAiConfigToggle?.SetValueWithoutNotify(TabVisibilitySettings.GetUserPreference("aiconfig"));
+            _tabVisibleUnityCliToggle?.SetValueWithoutNotify(TabVisibilitySettings.GetUserPreference("unitycli"));
+            _tabVisibleHistoryToggle?.SetValueWithoutNotify(TabVisibilitySettings.GetUserPreference("history"));
+            _tabVisibleAnalyticsToggle?.SetValueWithoutNotify(TabVisibilitySettings.GetUserPreference("analytics"));
         }
 
         public void Open()
         {
-            // 每次打开重建 Shortcuts 行，拉取最新绑定（覆盖 Edit ▸ Shortcuts 外部改动）。
+            // Rebuild the Shortcuts row on every open, pulling the latest bindings (to reflect
+            // changes made outside via Edit ▸ Shortcuts).
             _shortcutsController?.Refresh();
-            // 绑定状态可能在 UnityCliWindow 里刚变过，开抽屉时取最新。
-            RefreshCliGroup();
+            RefreshPermissionsUi();
+            SyncTabVisibilityUi();
+            RefreshLocalization();
+            // The binding state may have just changed in UnityCliWindow, so fetch the latest when opening the drawer.
 
-            if (_drawerContainer != null) _drawerContainer.AddToClassList("open");
+
+            if (_drawerContainer != null)
+            {
+                _drawerContainer.style.display = DisplayStyle.Flex;
+                _drawerContainer.schedule.Execute(() => _drawerContainer.AddToClassList("open")).StartingIn(0);
+            }
             if (_drawerMask != null)
             {
+                _drawerMask.style.display = DisplayStyle.Flex;
                 _drawerMask.RemoveFromClassList("hidden");
-                // next frame add 'open' for opacity transition (avoids flash)
                 _drawerMask.schedule.Execute(() => _drawerMask.AddToClassList("open")).StartingIn(0);
                 _drawerMask.pickingMode = PickingMode.Position;
             }
@@ -472,13 +507,27 @@ namespace UnitySkills
 
         public void Close()
         {
-            if (_drawerContainer != null) _drawerContainer.RemoveFromClassList("open");
+            if (_drawerContainer != null)
+            {
+                _drawerContainer.RemoveFromClassList("open");
+                _drawerContainer.schedule.Execute(() =>
+                {
+                    if (_drawerContainer != null && !_drawerContainer.ClassListContains("open"))
+                        _drawerContainer.style.display = DisplayStyle.None;
+                }).StartingIn(220);
+            }
             if (_drawerMask != null)
             {
                 _drawerMask.RemoveFromClassList("open");
                 _drawerMask.pickingMode = PickingMode.Ignore;
-                // hide after the 0.18s opacity transition completes
-                _drawerMask.schedule.Execute(() => _drawerMask.AddToClassList("hidden")).StartingIn(200);
+                _drawerMask.schedule.Execute(() =>
+                {
+                    if (_drawerMask != null && !_drawerMask.ClassListContains("open"))
+                    {
+                        _drawerMask.AddToClassList("hidden");
+                        _drawerMask.style.display = DisplayStyle.None;
+                    }
+                }).StartingIn(200);
             }
         }
 
@@ -507,18 +556,41 @@ namespace UnitySkills
             if (_viewAuditBtn != null)
                 _viewAuditBtn.text = SkillsLocalization.Get("perm_view_audit_log");
 
+            if (_permGroupTitle != null) _permGroupTitle.text = SkillsLocalization.Get("drawer_section_permissions");
+            if (_modeLabel != null) _modeLabel.text = SkillsLocalization.Get("perm_mode_label");
+            if (_panelApprovalToggle != null)
+                _panelApprovalToggle.label = SkillsLocalization.Get("perm_require_panel_approval");
+            if (_panelApprovalHint != null)
+                _panelApprovalHint.text = SkillsLocalization.Get("perm_require_panel_approval_hint");
+            if (_confirmLabel != null) _confirmLabel.text = SkillsLocalization.Get("drawer_confirm_label");
+            if (_confirmHint != null) _confirmHint.text = SkillsLocalization.Get("drawer_confirm_hint");
+            if (_allowlistClearBtn != null) _allowlistClearBtn.text = SkillsLocalization.Get("perm_allowlist_clear_all");
+            if (_allowlistAddBtn != null) _allowlistAddBtn.text = SkillsLocalization.Get("perm_add_skill_btn");
+            if (_viewAuditBtn != null) _viewAuditBtn.text = SkillsLocalization.Get("perm_view_audit_log");
+
+            if (_tabVisibilityTitle != null) _tabVisibilityTitle.text = SkillsLocalization.Get("settings_tab_visibility_title");
+            if (_tabVisibilityHint != null) _tabVisibilityHint.text = SkillsLocalization.Get("settings_tab_visibility_hint");
+            if (_tabVisibleSkillsLabel != null) _tabVisibleSkillsLabel.text = SkillsLocalization.Get("tab_skills");
+            if (_tabVisibleAiConfigLabel != null) _tabVisibleAiConfigLabel.text = SkillsLocalization.Get("tab_ai_config");
+            if (_tabVisibleUnityCliLabel != null) _tabVisibleUnityCliLabel.text = SkillsLocalization.Get("tab_unity_cli");
+            if (_tabVisibleHistoryLabel != null) _tabVisibleHistoryLabel.text = SkillsLocalization.Get("tab_history");
+            if (_tabVisibleAnalyticsLabel != null) _tabVisibleAnalyticsLabel.text = SkillsLocalization.Get("tab_analytics");
+
             if (_agentSyncGroupTitle != null)
                 _agentSyncGroupTitle.text = SkillsLocalization.Get("drawer_section_agent_sync");
             if (_agentAutoSyncToggle != null)
                 _agentAutoSyncToggle.label = SkillsLocalization.Get("agent_autosync_label");
             if (_agentAutoSyncHint != null)
                 _agentAutoSyncHint.text = SkillsLocalization.Get("agent_autosync_hint");
+            if (_agentInstructionToggle != null)
+                _agentInstructionToggle.label = SkillsLocalization.Get("agent_instruction_label");
+            if (_agentInstructionHint != null)
+                _agentInstructionHint.text = SkillsLocalization.Get("agent_instruction_hint");
 
-            RefreshCliGroup();
+
 
             // Pending / Allowlist titles include counts, so rebuild via RefreshPermissionsUi
             // to pick up the new language strings together with the live data.
-            RefreshPermissionsUi();
 
             if (_serverGroupTitle  != null) _serverGroupTitle.text  = SkillsLocalization.Get("drawer_section_server");
             if (_runtimeGroupTitle != null) _runtimeGroupTitle.text = SkillsLocalization.Get("drawer_section_runtime");
@@ -541,30 +613,18 @@ namespace UnitySkills
                 _updateNotificationsLabel.text = SkillsLocalization.Get("drawer_update_notifications_label");
             if (_updateNotificationsHint != null)
                 _updateNotificationsHint.text = SkillsLocalization.Get("drawer_update_notifications_hint");
-            if (_confirmLabel != null) _confirmLabel.text = SkillsLocalization.Get("drawer_confirm_label");
-            if (_confirmHint   != null)
-            {
-                _confirmHint.text = SkillsLocalization.Get("drawer_confirm_hint");
-            }
+
+            if (_updateCheckLabel != null)
+                _updateCheckLabel.text = SkillsLocalization.Get("drawer_update_check_label");
+            // Status and button text are stored as localization keys, not resolved strings, so both
+            // re-resolve here in every state -- including a check or update that is still in flight.
+            ApplyUpdateCheckButtonText();
+            ApplyUpdateCheckStatus();
 
             if (_telemetryLabel != null)
                 _telemetryLabel.text = SkillsLocalization.Get("drawer_telemetry_label");
             if (_telemetryHint != null)
                 _telemetryHint.text = SkillsLocalization.Get("drawer_telemetry_hint");
-
-            if (_summaryTruncateLabel != null)
-                _summaryTruncateLabel.text = SkillsLocalization.Get("drawer_summary_truncate_label");
-            if (_summaryTruncateHint != null)
-                _summaryTruncateHint.text = SkillsLocalization.Get("drawer_summary_truncate_hint");
-
-            if (_surfaceProfileLabel != null)
-            {
-                _surfaceProfileLabel.text    = SkillsLocalization.Get("surface_profile");
-                _surfaceProfileLabel.tooltip = SkillsLocalization.Get("surface_profile_tooltip");
-            }
-            if (_surfaceProfileDropdown != null)
-                _surfaceProfileDropdown.tooltip = SkillsLocalization.Get("surface_profile_tooltip");
-            RebuildSurfaceProfileDropdown();
 
             if (_statsHint     != null) _statsHint.text     = SkillsLocalization.Get("drawer_stats_hint");
             if (_statsResetBtn != null) _statsResetBtn.text = SkillsLocalization.Get("drawer_reset_stats_btn");
@@ -591,149 +651,246 @@ namespace UnitySkills
 
         private void SyncSettingSwitches()
         {
-            _updateNotificationsSwitch?.EnableInClassList(
-                "on", VersionCheckService.NotificationsEnabled);
-            _confirmSwitch?.EnableInClassList("on", ConfirmationTokenService.RequireConfirmation);
-            _telemetrySwitch?.EnableInClassList("on", SkillTelemetryService.Enabled);
-            _summaryTruncateSwitch?.EnableInClassList("on", SkillRouter.SummaryAutoTruncate);
+            _updateNotificationsToggle?.SetValueWithoutNotify(VersionCheckService.NotificationsEnabled);
+            _telemetryToggle?.SetValueWithoutNotify(SkillTelemetryService.Enabled);
+        }
+
+        // ===== Package update check (two-step: check first, then update on a second click) =====
+
+        private enum UpdateCheckState { Idle, Checking, Ready, Updating }
+
+        private UpdateCheckState _updateCheckState = UpdateCheckState.Idle;
+        private PackageManagerHelper.SelfInstallKind _updateCheckKind;
+        private string _updateCheckVersion; // raw latest stable version, null for beta targets
+
+        // Update target and status are held as localization keys (plus, where needed, a verbatim
+        // argument) instead of resolved text, so a language switch can re-resolve both. Storing the
+        // resolved string here is what used to freeze this row in whichever language was active when
+        // the check ran.
+        private string _updateCheckTargetKey;     // key for a localized target, e.g. the beta head
+        private string _updateCheckTargetLiteral; // verbatim target, e.g. "v2.8.2"
+        private string _updateCheckStatusKey;     // null while no status line is shown
+        private string _updateCheckStatusArgKey;  // {0} resolved from another key
+        private string _updateCheckStatusArgText; // {0} taken verbatim (upstream Package Manager text)
+
+        private string UpdateCheckTargetText => _updateCheckTargetKey != null
+            ? SkillsLocalization.Get(_updateCheckTargetKey)
+            : _updateCheckTargetLiteral ?? string.Empty;
+
+        private void OnUpdateCheckClicked()
+        {
+            switch (_updateCheckState)
+            {
+                case UpdateCheckState.Idle:
+                    BeginUpdateCheck();
+                    break;
+                case UpdateCheckState.Ready:
+                    StartSelfUpdate();
+                    break;
+                // Checking / Updating: the button is disabled, so clicks should not arrive here.
+            }
+        }
+
+        private void BeginUpdateCheck()
+        {
+            _updateCheckKind = PackageManagerHelper.DetectSelfInstallKind();
+            if (_updateCheckKind == PackageManagerHelper.SelfInstallKind.Unsupported)
+            {
+                SetUpdateCheckStatus("update_check_unsupported");
+                return;
+            }
+
+            _updateCheckState = UpdateCheckState.Checking;
+            _updateCheckBtn?.SetEnabled(false);
+            SetUpdateCheckStatus("update_check_checking");
+
+            if (_updateCheckKind == PackageManagerHelper.SelfInstallKind.Beta)
+            {
+                VersionCheckService.FetchBetaHeadSha(OnBetaHeadFetched);
+            }
+            else
+            {
+                VersionCheckService.CheckCompleted += OnStableCheckCompleted;
+                VersionCheckService.StartCheck(force: true);
+            }
+        }
+
+        private void OnStableCheckCompleted()
+        {
+            VersionCheckService.CheckCompleted -= OnStableCheckCompleted;
+            if (_updateCheckState != UpdateCheckState.Checking) return;
+
+            var release = VersionCheckService.LatestRelease;
+            if (release != null &&
+                VersionCheckService.TryCompareVersions(release.Version, SkillsLogger.Version, out var comparison) &&
+                comparison > 0)
+            {
+                // Manual checks ignore the dismissed banner version on purpose.
+                _updateCheckVersion = release.Version;
+                EnterReadyState(null, "v" + release.Version);
+            }
+            else
+            {
+                EnterIdleState("update_check_latest");
+            }
+        }
+
+        private void OnBetaHeadFetched(string sha)
+        {
+            if (_updateCheckState != UpdateCheckState.Checking) return;
+
+            if (sha == null)
+            {
+                EnterIdleState("update_check_failed_fmt", argKey: "update_check_reason_network");
+                return;
+            }
+
+            // PackageManager stores the full SHA; tolerate short revisions via prefix match.
+            var installed = PackageManagerHelper.GetSelfInstalledRevision();
+            var hasUpdate = string.IsNullOrEmpty(installed) ||
+                !sha.StartsWith(installed, StringComparison.OrdinalIgnoreCase);
+            if (hasUpdate)
+            {
+                _updateCheckVersion = null;
+                EnterReadyState("update_check_beta_target", null);
+            }
+            else
+            {
+                EnterIdleState("update_check_latest");
+            }
+        }
+
+        private void StartSelfUpdate()
+        {
+            _updateCheckState = UpdateCheckState.Updating;
+            _updateCheckBtn?.SetEnabled(false);
+            SetUpdateCheckStatus("update_check_updating");
+
+            if (_updateCheckKind == PackageManagerHelper.SelfInstallKind.Local)
+            {
+                // Local (file:/embedded) installs download the repo archive and swap directories
+                // instead of asking the Package Manager to rewrite the manifest.
+                LocalSelfUpdateService.Start(_updateCheckVersion, (success, message) =>
+                {
+                    if (_updateCheckState != UpdateCheckState.Updating) return;
+                    if (success)
+                    {
+                        // The package swap triggers a domain reload that tears this UI down anyway.
+                        SetUpdateCheckStatus("update_check_done");
+                    }
+                    else if (message == LocalSelfUpdateService.CancelledMessage)
+                    {
+                        EnterIdleState("update_check_cancelled");
+                    }
+                    else
+                    {
+                        EnterIdleState("update_check_failed_fmt",
+                            argKey: ResolveFailureReasonKey(message),
+                            argText: message);
+                    }
+                });
+                return;
+            }
+
+            PackageManagerHelper.UpdateSelf(_updateCheckKind, _updateCheckVersion, (success, message) =>
+            {
+                if (_updateCheckState != UpdateCheckState.Updating) return;
+                if (success)
+                {
+                    // The package swap triggers a domain reload that tears this UI down anyway.
+                    SetUpdateCheckStatus("update_check_done");
+                }
+                else
+                {
+                    EnterIdleState("update_check_failed_fmt",
+                        argKey: ResolveFailureReasonKey(message),
+                        argText: message);
+                }
+            });
+        }
+
+        /// <summary>
+        /// Maps the failure text from <see cref="PackageManagerHelper"/> to a localization key when it
+        /// is one of our own sentinels; returns null when the text is an upstream Package Manager
+        /// diagnostic, which is shown verbatim.
+        /// </summary>
+        private static string ResolveFailureReasonKey(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return "update_check_reason_unknown";
+            if (message == PackageManagerHelper.BusyMessage) return "update_check_reason_busy";
+            if (message == PackageManagerHelper.UnknownErrorMessage) return "update_check_reason_unknown";
+            if (message == LocalSelfUpdateService.NetworkErrorMessage) return "update_check_reason_network";
+            if (message == LocalSelfUpdateService.DiskErrorMessage) return "update_check_reason_disk";
+            if (message == LocalSelfUpdateService.InvalidPackageErrorMessage) return "update_check_reason_invalid";
+            if (message == LocalSelfUpdateService.PackageRootNotFoundMessage) return "update_check_reason_path";
+            return null;
+        }
+
+        private void EnterReadyState(string targetKey, string targetLiteral)
+        {
+            _updateCheckState = UpdateCheckState.Ready;
+            _updateCheckTargetKey = targetKey;
+            _updateCheckTargetLiteral = targetLiteral;
+            SetUpdateCheckStatus("update_check_new_version_fmt");
+            ApplyUpdateCheckButtonText();
+            _updateCheckBtn?.SetEnabled(true);
+        }
+
+        private void EnterIdleState(string statusKey, string argKey = null, string argText = null)
+        {
+            _updateCheckState = UpdateCheckState.Idle;
+            _updateCheckTargetKey = null;
+            _updateCheckTargetLiteral = null;
+            SetUpdateCheckStatus(statusKey, argKey, argText);
+            ApplyUpdateCheckButtonText();
+            _updateCheckBtn?.SetEnabled(true);
+        }
+
+        private void SetUpdateCheckStatus(string key, string argKey = null, string argText = null)
+        {
+            _updateCheckStatusKey = key;
+            _updateCheckStatusArgKey = argKey;
+            _updateCheckStatusArgText = argText;
+            ApplyUpdateCheckStatus();
+        }
+
+        private void ApplyUpdateCheckStatus()
+        {
+            if (_updateCheckStatus == null) return;
+
+            if (string.IsNullOrEmpty(_updateCheckStatusKey))
+            {
+                _updateCheckStatus.text = string.Empty;
+                return;
+            }
+
+            // The "new version" status carries the update target as its argument, and that target may
+            // itself be a localized string, so re-read it here instead of trusting the value captured
+            // when the check ran.
+            var arg = _updateCheckStatusKey == "update_check_new_version_fmt"
+                ? UpdateCheckTargetText
+                : (_updateCheckStatusArgKey != null
+                    ? SkillsLocalization.Get(_updateCheckStatusArgKey)
+                    : _updateCheckStatusArgText);
+
+            _updateCheckStatus.text = arg == null
+                ? SkillsLocalization.Get(_updateCheckStatusKey)
+                : SkillsLocalization.Get(_updateCheckStatusKey, arg);
+        }
+
+        private void ApplyUpdateCheckButtonText()
+        {
+            if (_updateCheckBtn == null) return;
+
+            // Updating keeps the Ready label (the button is disabled meanwhile).
+            _updateCheckBtn.text =
+                _updateCheckState == UpdateCheckState.Ready || _updateCheckState == UpdateCheckState.Updating
+                    ? SkillsLocalization.Get("update_check_update_now_fmt", UpdateCheckTargetText)
+                    : SkillsLocalization.Get("update_check_btn");
         }
 
         private static SkillsLocalization.Language ParseLanguage(string value) =>
             (SkillsLocalization.Language)Enum.Parse(typeof(SkillsLocalization.Language), value);
-
-        // ===== Surface profile (skill surface) =====
-
-        /// <summary>
-        /// Fills the localized option names in <see cref="_profileOrder"/> order, then writes back
-        /// the current profile and its description. Rebuilt on language change, because choices
-        /// hold display text.
-        /// </summary>
-        private void RebuildSurfaceProfileDropdown()
-        {
-            if (_surfaceProfileDropdown == null) return;
-            _surfaceProfileDropdown.choices = new List<string>
-            {
-                SkillsLocalization.Get("surface_profile_full"),
-                SkillsLocalization.Get("surface_profile_guide"),
-                SkillsLocalization.Get("surface_profile_no_scene_authoring"),
-            };
-            RefreshSurfaceProfileUi();
-        }
-
-        /// <summary>
-        /// Writes the current profile back into the dropdown and recomputes the hint. This is also
-        /// the <see cref="SkillsSurfaceProfile.OnChanged"/> handler, which is why the value must go
-        /// in via SetValueWithoutNotify — otherwise it and its own ValueChanged callback would
-        /// trigger each other.
-        /// </summary>
-        private void RefreshSurfaceProfileUi()
-        {
-            if (_surfaceProfileDropdown != null)
-            {
-                int idx = Array.IndexOf(_profileOrder, SkillsSurfaceProfile.Current);
-                if (idx >= 0 && idx < _surfaceProfileDropdown.choices.Count)
-                    _surfaceProfileDropdown.SetValueWithoutNotify(_surfaceProfileDropdown.choices[idx]);
-            }
-            ApplySurfaceProfileHintText();
-        }
-
-        private void ApplySurfaceProfileHintText()
-        {
-            if (_surfaceProfileHint == null) return;
-
-            var profile = SkillsSurfaceProfile.Current;
-            var stats = MeasureHiddenSurface();
-            string text;
-            switch (profile)
-            {
-                case SurfaceProfileKind.Guide:
-                    text = string.Format(
-                        SkillsLocalization.Get("surface_profile_guide_hint"),
-                        stats.IsKnown ? string.Join(" / ", stats.Modules) : FallbackModuleList(profile));
-                    break;
-                case SurfaceProfileKind.NoSceneAuthoring:
-                    // This profile covers too many modules to list without filling the drawer, so
-                    // it gets prose plus the measured count appended below.
-                    text = SkillsLocalization.Get("surface_profile_no_scene_authoring_hint");
-                    break;
-                default:
-                    text = SkillsLocalization.Get("surface_profile_full_hint");
-                    break;
-            }
-
-            if (stats.IsKnown && stats.Writes > 0)
-                text += " " + string.Format(
-                    SkillsLocalization.Get("surface_profile_hidden_count_fmt"),
-                    stats.Writes, stats.Modules.Count);
-
-            _surfaceProfileHint.text = text;
-        }
-
-        /// <summary>
-        /// What the current profile hides, measured against the registry rather than restated from
-        /// the category sets. <see cref="Modules"/> is null when the measurement could not be taken.
-        /// </summary>
-        private readonly struct HiddenSurfaceStats
-        {
-            public readonly int Writes;
-            public readonly List<string> Modules;
-            public HiddenSurfaceStats(int writes, List<string> modules) { Writes = writes; Modules = modules; }
-            public bool IsKnown => Modules != null;
-        }
-
-        /// <summary>
-        /// Counts the hidden writes and collects the modules they belong to in one pass over the
-        /// unfiltered registry, asking <see cref="SkillsSurfaceProfile.IsExcluded(SkillRouter.SkillInfo)"/>
-        /// about each skill.
-        ///
-        /// Deriving both numbers from the same verdict the router enforces is the entire point.
-        /// Neither can be read off the category sets any more: escape-hatch skills are hidden by
-        /// name under every non-full profile, and NoSceneAuthoring additionally hides any write
-        /// declaring MutatesScene whatever its module — so <c>HiddenCategories</c> understates both
-        /// the module list and the count. The category-only IsExcluded overload documents the same
-        /// caveat and is deliberately not used here.
-        ///
-        /// Returns the default (IsKnown false) when the registry cannot be read, and the caller
-        /// then drops the count sentence rather than printing a wrong number.
-        /// </summary>
-        private static HiddenSurfaceStats MeasureHiddenSurface()
-        {
-            if (SkillsSurfaceProfile.IsFull) return default;
-            try
-            {
-                var all = SkillRouter.GetAllSkillsSnapshotUnfiltered();
-                if (all == null) return default;
-
-                int writes = 0;
-                var modules = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var skill in all)
-                {
-                    if (skill == null || !SkillsSurfaceProfile.IsExcluded(skill)) continue;
-                    writes++;
-                    modules.Add(skill.Category.ToString());
-                }
-                return new HiddenSurfaceStats(writes, modules.ToList());
-            }
-            catch
-            {
-                return default;
-            }
-        }
-
-        /// <summary>
-        /// Module list used only when the registry could not be measured. Reads the category set
-        /// directly, which understates what is hidden but beats leaving the sentence blank.
-        /// <see cref="SkillsSurfaceProfile.HiddenCategories"/> hands back a reference to an internal
-        /// HashSet, so this only enumerates it — never mutate it in place.
-        /// </summary>
-        private static string FallbackModuleList(SurfaceProfileKind profile)
-        {
-            var categories = SkillsSurfaceProfile.HiddenCategories(profile);
-            if (categories == null || categories.Count == 0) return string.Empty;
-            return string.Join(" / ", categories
-                .Select(c => c.ToString())
-                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
-        }
 
         // ===== Permissions group helpers =====
 
@@ -766,48 +923,41 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// Unity CLI 组：标题/按钮文案 + 绑定状态提示。绑定发生在 UnityCliWindow，
-        /// 抽屉每次本地化刷新（含 Open）时顺带取一次最新状态即可，无需轮询。
-        /// </summary>
-        private void RefreshCliGroup()
-        {
-            if (_cliGroupTitle != null)
-                _cliGroupTitle.text = SkillsLocalization.Get("cli_group_title");
-            if (_cliOpenBtn != null)
-            {
-                _cliOpenBtn.text = SkillsLocalization.Get("cli_setup_entry");
-                _cliOpenBtn.tooltip = SkillsLocalization.Get("cli_setup_entry_tip");
-            }
-            if (_cliHint != null)
-            {
-                _cliHint.text = UnityCliService.IsBound
-                    ? SkillsLocalization.Get("cli_drawer_hint_bound")
-                    : SkillsLocalization.Get("cli_drawer_hint_unbound");
-            }
-        }
+        /// Unity CLI group: title/button text + binding-status hint. Binding happens in
+        /// UnityCliWindow; the drawer only needs to fetch the latest state once per localization
+
 
         /// <summary>
-        /// 同步三类权限 UI：模式 toggles、Approval 设置 row、Pending/Granted 列表。
-        /// 由 OnChanged 事件、本类初始化、Localization 切换调用。
+        /// Syncs the three categories of permission UI: mode toggles, the Approval settings row,
+        /// and the Pending/Granted lists.
+        /// Called by the OnChanged event, this class's initialization, and localization switches.
         /// </summary>
         private void RefreshPermissionsUi()
         {
             if (_drawerContainer == null) return;
             var mode = SkillsModeManager.CurrentMode;
 
-            // 1) dropdown 同步到当前模式 + 刷新 hint
+            // 1) Sync the dropdown to the current mode + refresh the hint
             SyncModeDropdownValue(mode);
             ApplyModeHintText(mode);
 
-            // 2) Panel Approval row 仅 Approval 模式可见
-            SetDisplay(_panelApprovalRow, mode == SkillsOperatingMode.Approval);
+            // 2) The Panel Approval row is only visible in Approval mode
+            _panelApprovalRow.SetVisible(mode == SkillsOperatingMode.Approval);
             if (_panelApprovalToggle != null)
                 _panelApprovalToggle.SetValueWithoutNotify(SkillsModeManager.PanelApprovalRequired);
+            if (_confirmToggle != null)
+                _confirmToggle.SetValueWithoutNotify(ConfirmationTokenService.RequireConfirmation);
 
-            // 3) Pending 列表 — 仅 Approval 模式 + 有待批时显示
+            _tabVisibleSkillsToggle?.SetValueWithoutNotify(TabVisibilitySettings.GetUserPreference("skills"));
+            _tabVisibleAiConfigToggle?.SetValueWithoutNotify(TabVisibilitySettings.GetUserPreference("aiconfig"));
+            _tabVisibleUnityCliToggle?.SetValueWithoutNotify(TabVisibilitySettings.GetUserPreference("unitycli"));
+            _tabVisibleHistoryToggle?.SetValueWithoutNotify(TabVisibilitySettings.GetUserPreference("history"));
+            _tabVisibleAnalyticsToggle?.SetValueWithoutNotify(TabVisibilitySettings.GetUserPreference("analytics"));
+
+            // 3) The Pending list — shown only in Approval mode + when there are pending items
             var pending = SkillsModeManager.PendingGrantRequests;
             bool showPending = mode == SkillsOperatingMode.Approval && pending.Count > 0;
-            SetDisplay(_pendingSection, showPending);
+            _pendingSection.SetVisible(showPending);
             if (showPending)
             {
                 if (_pendingTitle != null)
@@ -821,10 +971,10 @@ namespace UnitySkills
                 _pendingList.Clear();
             }
 
-            // 4) Allowlist 列表 — Approval/Auto 显示（Bypass 隐藏）
+            // 4) The Allowlist list — shown in Approval/Auto (hidden in Bypass)
             var allowlist = SkillsModeManager.AllowlistSkills;
             bool showAllowlist = mode != SkillsOperatingMode.Bypass;
-            SetDisplay(_allowlistSection, showAllowlist);
+            _allowlistSection.SetVisible(showAllowlist);
             if (showAllowlist)
             {
                 if (_allowlistFoldout != null)
@@ -855,22 +1005,20 @@ namespace UnitySkills
         {
             var card = new VisualElement();
             card.AddToClassList("task-card");
-            card.style.flexDirection = FlexDirection.Column;
-            card.style.marginBottom = 4;
+            card.AddToClassList("built-card");
 
-            var head = new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
+            var head = new VisualElement();
+            head.AddToClassList("built-row");
             var title = new Label($"{req.SkillName}  ({req.Channel})  #{PermissionUiHelpers.ShortToken(req.Token)}");
             title.AddToClassList("bold-label");
-            title.style.flexGrow = 1;
-            title.style.fontSize = 11;
+            title.AddToClassList("card-row__title");
             head.Add(title);
 
             var expires = new Label(PermissionUiHelpers.FormatCountdown(req.ExpiresAtUtc));
             expires.AddToClassList("setting-hint");
             expires.AddToClassList(PendingExpiresClass); // marker for RefreshPendingExpiry sweep
+            expires.AddToClassList("pending-row__expires");
             expires.userData = req.ExpiresAtUtc;
-            expires.style.marginTop = 0;
-            expires.style.marginBottom = 0;
             head.Add(expires);
             card.Add(head);
 
@@ -878,38 +1026,39 @@ namespace UnitySkills
             {
                 var args = new Label($"args: {req.ArgsSummary}");
                 args.AddToClassList("setting-hint");
-                args.style.whiteSpace = WhiteSpace.Normal;
-                args.style.marginTop = 2;
-                args.style.marginBottom = 4;
+                args.AddToClassList("pending-row__args");
                 card.Add(args);
             }
 
             bool isPanel = req.Channel == "panel";
 
-            // 渠道区分反馈：Panel 渠道走面板 Approve；Dialog 渠道的批准走 AI 对话，面板按钮无效，给出明确指引
+            // Channel-specific feedback: the panel channel goes through the panel's Approve; the
+            // dialog channel's approval happens in the AI chat, the panel button doesn't apply
+            // there, so give a clear pointer instead
             if (isPanel && req.ApprovedByPanel)
             {
                 var status = new Label(SkillsLocalization.Get("perm_approved_waiting"));
                 status.AddToClassList("setting-hint");
-                status.style.marginBottom = 2;
+                status.AddToClassList("pending-row__note");
                 card.Add(status);
             }
             else if (!isPanel)
             {
                 var chatHint = new Label(SkillsLocalization.Get("perm_approve_in_chat"));
                 chatHint.AddToClassList("setting-hint");
-                chatHint.style.marginBottom = 2;
+                chatHint.AddToClassList("pending-row__note");
                 card.Add(chatHint);
             }
 
-            var actions = new VisualElement { style = { flexDirection = FlexDirection.Row, justifyContent = Justify.FlexEnd, marginTop = 2 } };
+            var actions = new VisualElement();
+            actions.AddToClassList("pending-row__actions");
             var approveBtn = new Button(() => SkillsModeManager.Approve(req.Token))
             {
                 text = SkillsLocalization.Get("perm_approve")
             };
             approveBtn.AddToClassList("mini-btn");
-            approveBtn.style.marginRight = 4;
-            approveBtn.SetEnabled(isPanel && !req.ApprovedByPanel); // 仅 Panel 渠道未批准时可点
+            approveBtn.AddToClassList("mini-btn--right-gap");
+            approveBtn.SetEnabled(isPanel && !req.ApprovedByPanel); // Clickable only when the panel channel hasn't approved yet
             actions.Add(approveBtn);
 
             var denyBtn = new Button(() => SkillsModeManager.Deny(req.Token))
@@ -925,8 +1074,10 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 打开 AllowlistPickerWindow —— 支持搜索、按 Category 分组勾选、整组一键选中、
-        /// 提交时合并高危确认。窗口自负责调 AddToAllowlist；本控制器在 OnChanged 链路上自动刷新列表。
+        /// Opens AllowlistPickerWindow — supports search, checkbox selection grouped by
+        /// Category, select-all-in-group, and merges the high-risk confirmation on submit. The
+        /// window handles calling AddToAllowlist itself; this controller auto-refreshes the list
+        /// on the OnChanged chain.
         /// </summary>
         private void OnAddAllowlistClicked()
         {
@@ -946,8 +1097,9 @@ namespace UnitySkills
                 return;
             }
 
-            // 用 SkillRouter snapshot 解析 name → Category；未注册 skill（注册表 refresh 间隔等）
-            // 归入特殊分组 "(Unknown)" 而不是丢弃，让用户至少能看到并 Remove。
+            // Resolve name → Category using the SkillRouter snapshot; an unregistered skill (e.g.
+            // during the registry's refresh interval) is grouped into the special "(Unknown)"
+            // bucket rather than dropped, so the user can at least see it and Remove it.
             // The unfiltered snapshot is required here: an allowlist can hold skill names the
             // current profile hides (switching profile does not clear the allowlist), and the
             // filtered snapshot would drop every one of them into "(Unknown)", leaving the user
@@ -961,7 +1113,7 @@ namespace UnitySkills
                         nameToCategory[s.Name] = s.Category.ToString();
                 }
             }
-            catch { /* snapshot 失败时全部归入 Unknown 分组 */ }
+            catch { /* If the snapshot fails, group everything into Unknown */ }
 
             var grouped = allowlist
                 .GroupBy(n => nameToCategory.TryGetValue(n, out var c) ? c : "(Unknown)")
@@ -973,9 +1125,9 @@ namespace UnitySkills
                 var foldout = new Foldout
                 {
                     text = $"{group.Key}  ({items.Count})",
-                    value = false, // 默认折叠，省空间；用户点开展看
+                    value = false, // Collapsed by default to save space; the user expands it to view
                 };
-                foldout.style.marginTop = 2;
+                foldout.AddToClassList("allowlist-foldout");
 
                 foreach (var name in items)
                     foldout.Add(BuildAllowlistRow(name));
@@ -986,11 +1138,11 @@ namespace UnitySkills
 
         private static VisualElement BuildAllowlistRow(string skillName)
         {
-            var row = new VisualElement
-            {
-                style = { flexDirection = FlexDirection.Row, alignItems = Align.Center, marginBottom = 2 }
-            };
-            var label = new Label(skillName) { style = { flexGrow = 1, fontSize = 11 } };
+            var row = new VisualElement();
+            row.AddToClassList("built-row");
+            row.AddToClassList("allowlist-row");
+            var label = new Label(skillName);
+            label.AddToClassList("card-row__title");
             row.Add(label);
 
             var removeBtn = new Button(() => SkillsModeManager.RemoveFromAllowlist(skillName))
@@ -1003,8 +1155,10 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 每秒一次：先比对 pending+granted 快照决定是否需要重建 list，否则只刷新倒计时。
-        /// OnChanged 事件链路如果丢失（后台窗口、跨域调用等场景），这条 polling 就是兜底。
+        /// Runs once per second: first compares a pending+granted snapshot to decide whether the
+        /// list needs rebuilding, otherwise just refreshes the countdown.
+        /// If the OnChanged event chain is ever lost (background window, cross-domain calls,
+        /// etc.), this polling is the fallback.
         /// </summary>
         private void TickPermissions()
         {
@@ -1039,13 +1193,15 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 每秒扫一遍 pending 列表中的 expires Label，按 userData 中的 UTC 过期时间重算文字。
-        /// 不重建条目，避免破坏潜在的 hover/focus；过期到 0 后下次 OnChanged 会清掉条目。
+        /// Scans the pending list's expires Labels once per second, recomputing the text from
+        /// the UTC expiry time stored in userData.
+        /// Doesn't rebuild the entries, to avoid disrupting any hover/focus in progress; once
+        /// expiry reaches 0, the next OnChanged clears the entry.
         /// </summary>
         private void RefreshPendingExpiry()
         {
             if (_pendingList == null) return;
-            // 没有待批就跳过 — 避免每秒都遍历空列表。
+            // Skip when there's nothing pending — avoids iterating an empty list every second.
             if (SkillsModeManager.CurrentMode != SkillsOperatingMode.Approval) return;
             if (SkillsModeManager.PendingGrantRequests.Count == 0) return;
 
@@ -1054,12 +1210,6 @@ namespace UnitySkills
                 if (label.userData is DateTime expiresUtc)
                     label.text = PermissionUiHelpers.FormatCountdown(expiresUtc);
             });
-        }
-
-        private static void SetDisplay(VisualElement el, bool visible)
-        {
-            if (el == null) return;
-            el.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
         }
     }
 }

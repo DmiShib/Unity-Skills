@@ -28,7 +28,7 @@ Window → Package Manager → + → Add package from git URL
 |------|-----|
 | **稳定版** (main) | `https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity` |
 | **开发测试版** (beta) | `https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity#beta` |
-| **指定版本** | `https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity#v1.6.8` |
+| **指定版本** | `https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity#v2.8.1` |
 
 也可以从 [Releases 页面](https://github.com/Besty0728/Unity-Skills/releases) 下载特定版本。
 
@@ -70,13 +70,15 @@ Window → UnitySkills → AI Config 标签页
 
 ```
 SKILL.md                    # 主 Skill 定义（AI 读取）
-skills/                     # 按模块分类的 Skill 文档（49 功能 + 20 顾问）
+skills/                     # 按模块分类的 Skill 文档（54 个 REST 模块文档 + 28 个顾问 = 82；共 805 个 Skills）
 scripts/unity_skills.py     # Python 客户端库
 scripts/agent_config.json   # Agent 配置
 references/                 # Unity 开发参考文档
 ```
 
-> **升级自动同步**：包版本变化后，下次编辑器加载时会把你已安装过的每个工具刷新到新版本，不用再点一次 Install。只更新已存在的安装；从未装过的工具不会被自动装上。覆盖方式与手动 Install 完全一致，因此对已安装副本的本地修改会被替换。可在 ⚙ 设置抽屉的 **AI 工具** 区关闭。
+> **升级自动同步**：包版本变化后，下次编辑器加载时会把你已安装过的每个工具刷新到新版本，不用再点一次 Install。只更新已存在的安装；从未装过的工具不会被自动装上。覆盖方式与手动 Install 完全一致，因此对已安装副本的本地修改会被替换。每份副本都带有生成它的包版本印记：多工程共享的副本（全局作用域）若已是本版本或更新（例如已被另一个更高版本的工程刷新过），会原样保留，落后的工程不会把它降级。面板的“更新”按钮遵循同一规则，无需更新时会提示；如需强制重装，请先卸载再安装。可在 ⚙ 设置抽屉的 **AI 工具** 区关闭。
+
+> **向 Agent 指令文件写入引导语（可选，默认关闭）**：在 ⚙ 设置抽屉的 **AI 工具** 区打开「向 AI 工具的指令文件写入引导语」后，Install 与自动同步会同时往每个已安装工具的根指令文件追加一行引导语（`When working on a Unity project, use Unity Skills.`），提示 AI 优先使用 Unity Skills。项目级：Claude Code 写 `CLAUDE.md`，Codex / Antigravity / Cursor / OpenCode / Kimi Code 共用 `AGENTS.md`；全局级：`~/.claude/CLAUDE.md`、`~/.codex/AGENTS.md`、`~/.gemini/GEMINI.md`、`~/.config/opencode/AGENTS.md`、`~/.kimi-code/AGENTS.md`（Cursor 无可靠全局机制，跳过）。打开开关会立即对所有已安装工具补写；关闭开关则精确移除该行——若文件只剩这一行则删除该文件。
 
 > **Codex 说明**：Antigravity 和 Codex 工作区共享 `.agents/skills/`，装一次即两边可用。Codex 自动扫描发现 skills，无需在 `AGENTS.md` 中声明。
 
@@ -324,4 +326,4 @@ unity_skills.list_instances()               # 枚举所有实例
 | [README_CN.md](../README_CN.md) | 项目说明（中文） |
 | [SKILL.md](../SkillsForUnity/unity-skills~/SKILL.md) | 完整 Skill API 参考 |
 | [CHANGELOG.md](../CHANGELOG.md) | 版本更新记录 |
-| [agent.md](../agent.md) | AI Agent 项目概览 |
+| [AGENTS.md](../AGENTS.md) | AI Agent 项目概览 |

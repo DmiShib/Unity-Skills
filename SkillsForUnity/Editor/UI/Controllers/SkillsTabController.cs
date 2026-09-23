@@ -25,7 +25,16 @@ namespace UnitySkills
         private Button        _refreshBtn;
         private Button        _validateBtn;
         private Label         _countBar;
-        private VisualElement _container;
+        private ListView      _skillsList;
+
+        private sealed class SkillsListItem
+        {
+            public bool IsCategory;
+            public string CategoryName;
+            public int SkillCount;
+            public UnitySkillsWindow.SkillInfo Skill;
+            public string FoldKey;
+        }
 
         // Right pane
         private Label         _emptyLabel;
@@ -40,6 +49,7 @@ namespace UnitySkills
         private Button        _clearBtn;
         private Label         _resultLabel;
         private TextField     _resultField;
+        private TokenLevelSliderWidget _tokenLevelWidget;
 
         private string _selectedSkillName;
         private string _filterText = "";
@@ -58,6 +68,7 @@ namespace UnitySkills
             uxml.CloneTree(_root);
 
             CacheUiReferences();
+            _tokenLevelWidget = new TokenLevelSliderWidget(_root);
             BindEvents();
             RebuildList();
             ShowEmpty();
@@ -69,7 +80,16 @@ namespace UnitySkills
             _refreshBtn   = _root.Q<Button>("refresh-btn");
             _validateBtn  = _root.Q<Button>("validate-btn");
             _countBar     = _root.Q<Label>("skills-count-bar");
-            _container    = _root.Q<VisualElement>("skills-container");
+            _skillsList   = _root.Q<ListView>("skills-list");
+
+            if (_skillsList != null)
+            {
+                _skillsList.fixedItemHeight = 24f;
+                _skillsList.virtualizationMethod = CollectionVirtualizationMethod.FixedHeight;
+                _skillsList.selectionType = SelectionType.None;
+                _skillsList.makeItem = MakeSkillsListItem;
+                _skillsList.bindItem = BindSkillsListItem;
+            }
 
             _emptyLabel    = _root.Q<Label>("detail-empty");
             _detailContent = _root.Q<VisualElement>("detail-content");
@@ -135,11 +155,24 @@ namespace UnitySkills
 
         private void RebuildList()
         {
-            if (_container == null) return;
-            _container.Clear();
+            if (_skillsList == null) return;
 
             var dict = _window.SkillsByCategory;
             if (dict == null) return;
+
+            // A surface-profile switch (or a token-level preset that changes it) can drop the
+            // selected skill's whole category from the catalog while the detail pane / Run
+            // button stay live on a skill that no longer exists. FindSkill checks the full
+            // catalog rather than the search-filtered rows, so an ordinary search-filter
+            // refresh where the skill still exists (just hidden by the current query) never
+            // trips this and leaves the selection alone.
+            if (!string.IsNullOrEmpty(_selectedSkillName) && FindSkill(_selectedSkillName) == null)
+            {
+                _selectedSkillName = null;
+                ShowEmpty();
+            }
+
+            var items = new List<SkillsListItem>();
 
             int totalShown = 0;
             int categoriesShown = 0;
@@ -152,8 +185,34 @@ namespace UnitySkills
                 categoriesShown++;
                 totalShown += filtered.Count;
 
-                BuildCategory(kvp.Key, filtered);
+                string foldKey = $"UnitySkills_Foldout_{kvp.Key}";
+                items.Add(new SkillsListItem
+                {
+                    IsCategory = true,
+                    CategoryName = kvp.Key,
+                    SkillCount = filtered.Count,
+                    FoldKey = foldKey,
+                });
+
+                // The old implementation created a VisualElement for every skill, even when
+                // most rows were below the fold. Maximum exposes the full skill surface, so a
+                // normal resize could force hundreds of text rows through Yoga on every width
+                // change. Keep the same foldout semantics but only materialize visible rows via
+                // ListView's fixed-height virtualization.
+                if (EditorPrefs.GetBool(foldKey, false))
+                {
+                    foreach (var skill in filtered)
+                    {
+                        items.Add(new SkillsListItem
+                        {
+                            Skill = skill,
+                        });
+                    }
+                }
             }
+
+            _skillsList.itemsSource = items;
+            _skillsList.Rebuild();
 
             if (_countBar != null)
             {
@@ -173,69 +232,95 @@ namespace UnitySkills
             return false;
         }
 
-        private void BuildCategory(string categoryName, List<UnitySkillsWindow.SkillInfo> skills)
+        private VisualElement MakeSkillsListItem()
         {
-            string foldKey = $"UnitySkills_Foldout_{categoryName}";
-            bool collapsed = !EditorPrefs.GetBool(foldKey, false);
+            var item = new VisualElement();
+            item.AddToClassList("skills-list-item");
 
-            var header = new VisualElement();
+            var header = new VisualElement { name = "skills-list-category" };
             header.AddToClassList("category-header");
-            header.style.flexDirection = FlexDirection.Row;
-            header.style.alignItems = Align.Center;
+            header.RegisterCallback<ClickEvent>(_ => ToggleCategory(header.userData as SkillsListItem));
 
-            var chevron = new Label(collapsed ? "▶" : "▼");
+            var chevron = new Label { name = "category-chevron" };
             chevron.AddToClassList("chevron");
             header.Add(chevron);
 
-            var nameLabel = new Label(categoryName);
-            nameLabel.style.flexGrow = 1;
+            var nameLabel = new Label { name = "category-name" };
+            nameLabel.AddToClassList("flex-grow");
             header.Add(nameLabel);
 
-            var countLabel = new Label(skills.Count.ToString());
+            var countLabel = new Label { name = "category-count" };
             countLabel.AddToClassList("cat-count");
             header.Add(countLabel);
+            item.Add(header);
 
-            var body = new VisualElement();
-            body.style.display = collapsed ? DisplayStyle.None : DisplayStyle.Flex;
-
-            foreach (var skill in skills)
+            var row = new VisualElement { name = "skills-list-skill" };
+            row.AddToClassList("skill-row");
+            row.RegisterCallback<ClickEvent>(_ =>
             {
-                body.Add(BuildSkillRow(skill));
-            }
-
-            header.RegisterCallback<ClickEvent>(_ =>
-            {
-                bool nowCollapsed = body.style.display == DisplayStyle.Flex;
-                body.style.display = nowCollapsed ? DisplayStyle.None : DisplayStyle.Flex;
-                chevron.text = nowCollapsed ? "▶" : "▼";
-                EditorPrefs.SetBool(foldKey, !nowCollapsed);
+                var listItem = row.userData as SkillsListItem;
+                if (listItem?.Skill != null) OnSkillSelected(listItem.Skill);
             });
 
-            _container.Add(header);
-            _container.Add(body);
+            var skillName = new Label { name = "skill-name" };
+            skillName.AddToClassList("skill-row__name");
+            row.Add(skillName);
+
+            var badge = new Label { name = "skill-risk-badge" };
+            badge.AddToClassList("risk-badge");
+            row.Add(badge);
+            item.Add(row);
+
+            return item;
         }
 
-        private VisualElement BuildSkillRow(UnitySkillsWindow.SkillInfo skill)
+        private void BindSkillsListItem(VisualElement element, int index)
         {
-            var row = new VisualElement();
-            row.AddToClassList("skill-row");
-            row.userData = skill;
+            var items = _skillsList?.itemsSource as List<SkillsListItem>;
+            if (items == null || index < 0 || index >= items.Count) return;
 
-            var nameLabel = new Label(skill.Name);
-            nameLabel.AddToClassList("skill-row__name");
-            row.Add(nameLabel);
+            var listItem = items[index];
+            var header = element.Q<VisualElement>("skills-list-category");
+            var row = element.Q<VisualElement>("skills-list-skill");
+            if (header == null || row == null) return;
 
-            if (IsHighRisk(skill))
+            bool isCategory = listItem.IsCategory;
+            header.SetVisible(isCategory);
+            row.SetVisible(!isCategory);
+
+            if (isCategory)
             {
-                var badge = new Label(SkillsLocalization.Get("skills_tag_danger"));
-                badge.AddToClassList("risk-badge");
-                row.Add(badge);
+                header.userData = listItem;
+                var chevron = header.Q<Label>("category-chevron");
+                var nameLabel = header.Q<Label>("category-name");
+                var countLabel = header.Q<Label>("category-count");
+                bool expanded = EditorPrefs.GetBool(listItem.FoldKey, false);
+                if (chevron != null) chevron.text = expanded ? "▼" : "▶";
+                if (nameLabel != null) nameLabel.text = listItem.CategoryName;
+                if (countLabel != null) countLabel.text = listItem.SkillCount.ToString();
+                return;
             }
 
-            if (skill.Name == _selectedSkillName) row.AddToClassList("selected");
+            row.userData = listItem;
+            var skill = listItem.Skill;
+            var skillName = row.Q<Label>("skill-name");
+            var badge = row.Q<Label>("skill-risk-badge");
+            bool highRisk = IsHighRisk(skill);
+            if (skillName != null) skillName.text = skill.Name;
+            if (badge != null)
+            {
+                badge.text = highRisk ? SkillsLocalization.Get("skills_tag_danger") : "";
+                badge.SetVisible(highRisk);
+            }
+            row.EnableInClassList("selected", skill.Name == _selectedSkillName);
+        }
 
-            row.RegisterCallback<ClickEvent>(_ => OnSkillSelected(skill));
-            return row;
+        private void ToggleCategory(SkillsListItem category)
+        {
+            if (category == null || !category.IsCategory) return;
+            bool expanded = EditorPrefs.GetBool(category.FoldKey, false);
+            EditorPrefs.SetBool(category.FoldKey, !expanded);
+            RebuildList();
         }
 
         private bool IsHighRisk(UnitySkillsWindow.SkillInfo skill)
@@ -249,15 +334,9 @@ namespace UnitySkills
 
         private void OnSkillSelected(UnitySkillsWindow.SkillInfo skill)
         {
+            if (skill == null) return;
             _selectedSkillName = skill.Name;
-
-            foreach (var r in _root.Query<VisualElement>(className: "skill-row").ToList())
-            {
-                if (r.userData is UnitySkillsWindow.SkillInfo si && si.Name == skill.Name)
-                    r.AddToClassList("selected");
-                else
-                    r.RemoveFromClassList("selected");
-            }
+            _skillsList?.RefreshItems();
 
             PopulateDetail(skill, _window.BuildDefaultParams(skill.Method));
         }
@@ -292,11 +371,30 @@ namespace UnitySkills
 
         private void PopulateDetail(UnitySkillsWindow.SkillInfo skill, string defaultParams)
         {
-            if (_emptyLabel != null)    _emptyLabel.style.display    = DisplayStyle.None;
-            if (_detailContent != null) _detailContent.style.display = DisplayStyle.Flex;
+            _emptyLabel.SetVisible(false);
+            _detailContent.SetVisible(true);
 
             if (_skillTitle != null) _skillTitle.text = skill.Name;
+            RelocalizeDetail(skill);
 
+            if (_paramsField != null) _paramsField.value = defaultParams ?? "{}";
+            if (_resultField != null) _resultField.value = "";
+            ClearResultError();
+
+            if (_dryRunBtn != null)
+            {
+                var attr = skill.Method?.GetCustomAttribute<UnitySkillAttribute>();
+                _dryRunBtn.SetEnabled(attr == null || attr.SupportsDryRun);
+            }
+        }
+
+        /// <summary>
+        /// Re-resolves the description and tags for the currently displayed skill. Split out of
+        /// <see cref="PopulateDetail"/> so a language switch can refresh this text without touching
+        /// the params field or a result the user has not cleared yet.
+        /// </summary>
+        private void RelocalizeDetail(UnitySkillsWindow.SkillInfo skill)
+        {
             // Description: prefer localized description by skill name key
             string desc = SkillsLocalization.Get(skill.Name);
             if (desc == skill.Name) desc = skill.Description;
@@ -321,22 +419,12 @@ namespace UnitySkills
                     }
                 }
             }
-
-            if (_paramsField != null) _paramsField.value = defaultParams ?? "{}";
-            if (_resultField != null) _resultField.value = "";
-            ClearResultError();
-
-            if (_dryRunBtn != null)
-            {
-                var attr = skill.Method?.GetCustomAttribute<UnitySkillAttribute>();
-                _dryRunBtn.SetEnabled(attr == null || attr.SupportsDryRun);
-            }
         }
 
         private void ShowEmpty()
         {
-            if (_emptyLabel != null)    _emptyLabel.style.display    = DisplayStyle.Flex;
-            if (_detailContent != null) _detailContent.style.display = DisplayStyle.None;
+            _emptyLabel.SetVisible(true);
+            _detailContent.SetVisible(false);
         }
 
         private void Execute(bool dryRun)
@@ -394,9 +482,25 @@ namespace UnitySkills
             if (_clearBtn != null)    _clearBtn.text    = SkillsLocalization.Get("skills_detail_clear");
             if (_resultLabel != null) _resultLabel.text = SkillsLocalization.Get("skills_detail_result_label");
             if (_emptyLabel != null)  _emptyLabel.text  = SkillsLocalization.Get("skills_detail_empty");
+            _tokenLevelWidget?.RefreshTokenLevelLocalization();
 
             // Rebuild list to refresh badge texts in active language
             RebuildList();
+
+            // The selected skill's description/tags were resolved once at selection time; re-resolve
+            // them here rather than leaving them frozen in whichever language was active back then.
+            // Params/result fields are left untouched -- the user may be mid-edit.
+            if (!string.IsNullOrEmpty(_selectedSkillName))
+            {
+                var skill = FindSkill(_selectedSkillName);
+                if (skill != null) RelocalizeDetail(skill);
+            }
+        }
+
+        public void Dispose()
+        {
+            _tokenLevelWidget?.Dispose();
+            _tokenLevelWidget = null;
         }
     }
 }

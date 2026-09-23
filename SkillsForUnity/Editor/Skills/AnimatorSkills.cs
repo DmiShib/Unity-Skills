@@ -8,14 +8,16 @@ using System.Collections.Generic;
 namespace UnitySkills
 {
     /// <summary>
-    /// Animator 管理技能：创建控制器、管理参数、控制播放。
+    /// Animator management skills: create controllers, manage parameters, control playback.
     /// </summary>
     public static class AnimatorSkills
     {
         [UnitySkill("animator_create_controller", "Create a new Animator Controller",
             Category = SkillCategory.Animator, Operation = SkillOperation.Create,
             Tags = new[] { "animator", "controller", "create", "animation" },
-            Outputs = new[] { "success", "name", "path" })]
+            Outputs = new[] { "success", "name", "path" },
+            RequiresInput = new[] { "name" },
+            MutatesAssets = true)]
         public static object AnimatorCreateController(string name, string folder = "Assets/Animations")
         {
             if (Validate.Required(name, "name") is object nameErr) return nameErr;
@@ -43,7 +45,8 @@ namespace UnitySkills
             Category = SkillCategory.Animator, Operation = SkillOperation.Modify,
             Tags = new[] { "animator", "parameter", "add", "controller" },
             Outputs = new[] { "success", "controller", "parameter", "type" },
-            RequiresInput = new[] { "animatorController" })]
+            RequiresInput = new[] { "controllerPath" },
+            MutatesAssets = true)]
         public static object AnimatorAddParameter(string controllerPath, string paramName, string paramType = "float", float defaultFloat = 0, int defaultInt = 0, bool defaultBool = false)
         {
             var pathErr = Validate.SafePath(controllerPath, "controllerPath");
@@ -76,8 +79,8 @@ namespace UnitySkills
             WorkflowManager.SnapshotObject(controller);
             controller.AddParameter(paramName, type);
 
-            // AnimatorControllerParameter 是值类型，必须按下标就地改写数组元素后整体回写，
-            // 直接改遍历出来的副本不会生效。
+            // AnimatorControllerParameter is a value type, so the array element must be mutated in
+            // place by index and written back wholesale; mutating a copy pulled out of the enumeration has no effect.
             var parameters = controller.parameters;
             int idx = System.Array.FindIndex(parameters, p => p.name == paramName);
             if (idx >= 0)
@@ -108,7 +111,7 @@ namespace UnitySkills
             Category = SkillCategory.Animator, Operation = SkillOperation.Query,
             Tags = new[] { "animator", "parameter", "list", "controller" },
             Outputs = new[] { "controller", "parameters" },
-            RequiresInput = new[] { "animatorController" },
+            RequiresInput = new[] { "controllerPath" },
             ReadOnly = true,
             Mode = SkillMode.SemiAuto)]
         public static object AnimatorGetParameters(string controllerPath)
@@ -136,7 +139,8 @@ namespace UnitySkills
             Category = SkillCategory.Animator, Operation = SkillOperation.Modify,
             Tags = new[] { "animator", "parameter", "set", "value" },
             Outputs = new[] { "success", "gameObject", "parameter", "value" },
-            RequiresInput = new[] { "gameObject" })]
+            RequiresInput = new[] { "gameObject" },
+            MutatesScene = true)]
         public static object AnimatorSetParameter(
             string name = null, int instanceId = 0, string path = null,
             string paramName = null, string paramType = "float",
@@ -154,9 +158,9 @@ namespace UnitySkills
                     errorCode = SkillErrorCode.TargetNotFound.ToWireString()
                 };
 
-            // Animator.SetFloat/SetInteger/SetBool/SetTrigger 遇到不存在的参数名会静默失败
-            // （不抛异常也不打日志），因此必须先比对运行时参数表，否则拼错的 paramName
-            // 会被当成成功返回。
+            // Animator.SetFloat/SetInteger/SetBool/SetTrigger fail silently on a parameter name
+            // that doesn't exist (no exception, no log), so the runtime parameter table must be
+            // checked first, otherwise a misspelled paramName would be reported as a success.
             var parameters = animator.parameters;
             var matchedParam = parameters.FirstOrDefault(p => p.name == paramName);
             bool paramExists = parameters.Any(p => p.name == paramName);
@@ -222,8 +226,8 @@ namespace UnitySkills
             var (animator, error) = GameObjectFinder.FindComponentOrError<Animator>(name, instanceId, path);
             if (error != null) return error;
 
-            // Animator.Play 遇到不存在的状态名同样静默失败，因此先递归遍历状态机
-            // （含子状态机）校验，避免拼错的 stateName 被当成播放成功。
+            // Animator.Play likewise fails silently on a state name that doesn't exist, so the state
+            // machine (including sub-state machines) is walked recursively to validate first, so a misspelled stateName isn't reported as a successful play.
             var controller = animator.runtimeAnimatorController as AnimatorController;
             if (controller == null && animator.runtimeAnimatorController != null)
             {
@@ -263,9 +267,9 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 把 <paramref name="stateMachine"/> 中所有可达状态名（带子状态机的点分路径）收集到
-        /// <paramref name="names"/>，并返回 <paramref name="target"/> 是否命中某个状态的
-        /// 简单名或完整点分路径。
+        /// Collects the names of all reachable states in <paramref name="stateMachine"/> (dotted
+        /// paths for sub-state machines) into <paramref name="names"/>, and returns whether
+        /// <paramref name="target"/> matches a state's simple name or its full dotted path.
         /// </summary>
         private static bool SearchStateMachineForState(AnimatorStateMachine stateMachine, string prefix, string target, List<string> names)
         {
@@ -320,7 +324,8 @@ namespace UnitySkills
             Category = SkillCategory.Animator, Operation = SkillOperation.Modify,
             Tags = new[] { "animator", "controller", "assign", "bind" },
             Outputs = new[] { "success", "gameObject", "controller" },
-            RequiresInput = new[] { "gameObject", "animatorController" })]
+            RequiresInput = new[] { "gameObject", "controllerPath" },
+            MutatesScene = true)]
         public static object AnimatorAssignController(string name = null, int instanceId = 0, string path = null, string controllerPath = null)
         {
             if (Validate.Required(controllerPath, "controllerPath") is object err2) return err2;
@@ -351,7 +356,7 @@ namespace UnitySkills
             Category = SkillCategory.Animator, Operation = SkillOperation.Query,
             Tags = new[] { "animator", "state", "list", "layer" },
             Outputs = new[] { "controller", "layer", "layerName", "stateCount", "states" },
-            RequiresInput = new[] { "animatorController" },
+            RequiresInput = new[] { "controllerPath" },
             ReadOnly = true,
             Mode = SkillMode.SemiAuto)]
         public static object AnimatorListStates(string controllerPath, int layer = 0)
@@ -388,8 +393,9 @@ namespace UnitySkills
             Category = SkillCategory.Animator, Operation = SkillOperation.Create | SkillOperation.Modify,
             Tags = new[] { "animator", "state", "add", "layer" },
             Outputs = new[] { "success", "controller", "stateName", "layer" },
-            RequiresInput = new[] { "animatorController" },
-            TracksWorkflow = true)]
+            RequiresInput = new[] { "controllerPath" },
+            TracksWorkflow = true,
+            MutatesAssets = true)]
         public static object AnimatorAddState(string controllerPath, string stateName, string clipPath = null, int layer = 0)
         {
             var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath);
@@ -411,8 +417,9 @@ namespace UnitySkills
             Category = SkillCategory.Animator, Operation = SkillOperation.Create | SkillOperation.Modify,
             Tags = new[] { "animator", "transition", "state", "flow" },
             Outputs = new[] { "success", "from", "to", "layer", "hasExitTime", "duration" },
-            RequiresInput = new[] { "animatorController" },
-            TracksWorkflow = true)]
+            RequiresInput = new[] { "controllerPath" },
+            TracksWorkflow = true,
+            MutatesAssets = true)]
         public static object AnimatorAddTransition(string controllerPath, string fromState, string toState, int layer = 0, bool hasExitTime = true, float duration = 0.25f)
         {
             var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath);

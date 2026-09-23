@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 using UnityEngine.UIElements;
 using UnityEditor;
@@ -31,6 +32,7 @@ namespace UnitySkills
             public string nameDisplay;
             public Func<bool> isProjInstalled;
             public Func<bool> isGlobInstalled;
+            public Func<bool, string> getPath;   // global → install directory, used for the version stamp check
             public Func<bool, (bool success, string message)> installFunc;
             public Func<bool, (bool success, string message)> uninstallFunc;
             public Func<bool, string, string> getInstallSuccessMsg;
@@ -72,6 +74,7 @@ namespace UnitySkills
                     nameDisplay = "Claude Code",
                     isProjInstalled = () => SkillInstaller.IsClaudeProjectInstalled,
                     isGlobInstalled = () => SkillInstaller.IsClaudeGlobalInstalled,
+                    getPath = global => global ? SkillInstaller.ClaudeGlobalPath : SkillInstaller.ClaudeProjectPath,
                     installFunc = SkillInstaller.InstallClaude,
                     uninstallFunc = SkillInstaller.UninstallClaude
                 },
@@ -81,6 +84,7 @@ namespace UnitySkills
                     nameDisplay = "Codex",
                     isProjInstalled = () => SkillInstaller.IsCodexProjectInstalled,
                     isGlobInstalled = () => SkillInstaller.IsCodexGlobalInstalled,
+                    getPath = global => global ? SkillInstaller.CodexGlobalPath : SkillInstaller.CodexProjectPath,
                     installFunc = SkillInstaller.InstallCodex,
                     uninstallFunc = SkillInstaller.UninstallCodex,
                     getInstallSuccessMsg = (global, msg) =>
@@ -93,6 +97,7 @@ namespace UnitySkills
                     nameDisplay = "Antigravity",
                     isProjInstalled = () => SkillInstaller.IsAntigravityProjectInstalled,
                     isGlobInstalled = () => SkillInstaller.IsAntigravityGlobalInstalled,
+                    getPath = global => global ? SkillInstaller.AntigravityGlobalPath : SkillInstaller.AntigravityProjectPath,
                     installFunc = SkillInstaller.InstallAntigravity,
                     uninstallFunc = SkillInstaller.UninstallAntigravity
                 },
@@ -102,6 +107,7 @@ namespace UnitySkills
                     nameDisplay = "Cursor",
                     isProjInstalled = () => SkillInstaller.IsCursorProjectInstalled,
                     isGlobInstalled = () => SkillInstaller.IsCursorGlobalInstalled,
+                    getPath = global => global ? SkillInstaller.CursorGlobalPath : SkillInstaller.CursorProjectPath,
                     installFunc = SkillInstaller.InstallCursor,
                     uninstallFunc = SkillInstaller.UninstallCursor
                 },
@@ -111,6 +117,7 @@ namespace UnitySkills
                     nameDisplay = "OpenCode",
                     isProjInstalled = () => SkillInstaller.IsOpenCodeProjectInstalled,
                     isGlobInstalled = () => SkillInstaller.IsOpenCodeGlobalInstalled,
+                    getPath = global => global ? SkillInstaller.OpenCodeGlobalPath : SkillInstaller.OpenCodeProjectPath,
                     installFunc = SkillInstaller.InstallOpenCode,
                     uninstallFunc = SkillInstaller.UninstallOpenCode
                 },
@@ -120,6 +127,7 @@ namespace UnitySkills
                     nameDisplay = "Kimi Code",
                     isProjInstalled = () => SkillInstaller.IsKimiCodeProjectInstalled,
                     isGlobInstalled = () => SkillInstaller.IsKimiCodeGlobalInstalled,
+                    getPath = global => global ? SkillInstaller.KimiCodeGlobalPath : SkillInstaller.KimiCodeProjectPath,
                     installFunc = SkillInstaller.InstallKimiCode,
                     uninstallFunc = SkillInstaller.UninstallKimiCode
                 }
@@ -148,8 +156,7 @@ namespace UnitySkills
 
             var head = new VisualElement();
             head.AddToClassList("agent-card-head");
-            head.style.flexDirection = FlexDirection.Row;
-            head.style.alignItems = Align.Center;
+            // .agent-card-head already declares flex-direction:row + align-items:center in USS.
 
             var icon = new VisualElement();
             icon.AddToClassList("agent-icon");
@@ -178,7 +185,7 @@ namespace UnitySkills
 
             var actions = new VisualElement();
             actions.AddToClassList("agent-card-actions");
-            actions.style.flexDirection = FlexDirection.Row;
+            // .agent-card-actions already declares flex-direction:row in USS.
 
             // Project button — install or update depending on state
             var projBtn = new Button(() => OnInstallClick(cfg, isGlobal: false, isUpdate: projInstalled));
@@ -219,6 +226,7 @@ namespace UnitySkills
             if (!projInstalled && !globInstalled)
             {
                 btn.text = SkillsLocalization.Get("uninstall");
+                btn.tooltip = btn.text;
                 btn.SetEnabled(false);
                 return btn;
             }
@@ -228,16 +236,18 @@ namespace UnitySkills
                 // Show a "▾" affordance so the user knows it opens a menu rather than
                 // immediately wiping one scope.
                 btn.text = SkillsLocalization.Get("uninstall") + " ▾";
+                btn.tooltip = btn.text;
                 btn.clicked += () => ShowUninstallMenu(btn, cfg);
                 return btn;
             }
 
             // Exactly one scope installed → directly uninstall it.
             bool targetGlobal = globInstalled;
-            string scopeKey = targetGlobal ? "agent_install_global" : "agent_install_project";
-            // Compose a clear label like "Uninstall Project" / "卸载 全局" so the user
-            // sees which scope this single click will affect.
-            btn.text = SkillsLocalization.Get("uninstall") + " " + SkillsLocalization.Get(scopeKey);
+            string actionKey = targetGlobal ? "agent_uninstall_global" : "agent_uninstall_project";
+            // Use a localized action label that identifies the affected scope.
+            btn.text = SkillsLocalization.Get(actionKey);
+            // Keep the full action name available when the equal-width layout ellipsizes it.
+            btn.tooltip = btn.text;
             btn.clicked += () => OnUninstallClick(cfg, targetGlobal);
             return btn;
         }
@@ -246,11 +256,11 @@ namespace UnitySkills
         {
             var menu = new GenericMenu();
             menu.AddItem(
-                new GUIContent(SkillsLocalization.Get("uninstall") + " " + SkillsLocalization.Get("agent_install_project")),
+                new GUIContent(SkillsLocalization.Get("agent_uninstall_project")),
                 false,
                 () => OnUninstallClick(cfg, isGlobal: false));
             menu.AddItem(
-                new GUIContent(SkillsLocalization.Get("uninstall") + " " + SkillsLocalization.Get("agent_install_global")),
+                new GUIContent(SkillsLocalization.Get("agent_uninstall_global")),
                 false,
                 () => OnUninstallClick(cfg, isGlobal: true));
             menu.DropDown(anchor.worldBound);
@@ -263,8 +273,7 @@ namespace UnitySkills
 
             var head = new VisualElement();
             head.AddToClassList("agent-card-head");
-            head.style.flexDirection = FlexDirection.Row;
-            head.style.alignItems = Align.Center;
+            // .agent-card-head already declares flex-direction:row + align-items:center in USS.
 
             var icon = new Label("+");
             icon.AddToClassList("agent-icon");
@@ -279,13 +288,12 @@ namespace UnitySkills
 
             var pathRow = new VisualElement();
             pathRow.AddToClassList("setting-row");
-            pathRow.style.flexDirection = FlexDirection.Row;
-            pathRow.style.alignItems = Align.Center;
-            pathRow.style.marginTop = 4;
+            pathRow.AddToClassList("setting-row--gap-top");
+            // .setting-row already declares flex-direction:row + align-items:center in USS.
 
             var pathField = new TextField();
             pathField.value = _customPath;
-            pathField.style.flexGrow = 1;
+            pathField.AddToClassList("flex-grow");
             pathField.tooltip = SkillsLocalization.Get("agent_custom_path_placeholder");
             pathField.RegisterValueChangedCallback(e => _customPath = e.newValue ?? "");
             pathRow.Add(pathField);
@@ -301,19 +309,18 @@ namespace UnitySkills
                 }
             });
             browseBtn.AddToClassList("mini-btn");
+            browseBtn.AddToClassList("mini-btn--inline-gap");
             browseBtn.text = SkillsLocalization.Get("agent_custom_browse");
-            browseBtn.style.marginLeft = 4;
             pathRow.Add(browseBtn);
             card.Add(pathRow);
 
             var nameRow = new VisualElement();
             nameRow.AddToClassList("setting-row");
-            nameRow.style.flexDirection = FlexDirection.Row;
-            nameRow.style.alignItems = Align.Center;
+            // .setting-row already declares flex-direction:row + align-items:center in USS.
 
             var nameInput = new TextField();
             nameInput.value = _customName;
-            nameInput.style.flexGrow = 1;
+            nameInput.AddToClassList("flex-grow");
             nameInput.tooltip = SkillsLocalization.Get("agent_custom_name_placeholder");
             nameInput.RegisterValueChangedCallback(e => _customName = e.newValue ?? "");
             nameRow.Add(nameInput);
@@ -321,16 +328,44 @@ namespace UnitySkills
             var installBtn = new Button(() => InstallCustom());
             installBtn.AddToClassList("mini-btn");
             installBtn.AddToClassList("install");
+            installBtn.AddToClassList("mini-btn--inline-gap");
             installBtn.text = SkillsLocalization.Get("agent_custom_install");
-            installBtn.style.marginLeft = 4;
             nameRow.Add(installBtn);
             card.Add(nameRow);
 
             return card;
         }
 
+        /// <summary>
+        /// Same rule as the post-upgrade auto-sync: a copy already at this package version or newer (e.g. refreshed
+        /// by another project on a newer package) is left alone. Returns true when the install should be skipped;
+        /// forcing a reinstall means Uninstall first. Only consulted when a copy is already present.
+        /// </summary>
+        private static bool ShowSkipIfInstalledCopyIsCurrentOrNewer(string targetPath)
+        {
+            var installedVersion = SkillInstaller.ReadInstalledVersion(targetPath);
+            switch (SkillInstaller.CompareInstalledVersion(installedVersion, SkillsLogger.Version))
+            {
+                case SkillInstaller.InstalledVersionState.Current:
+                    EditorUtility.DisplayDialog(SkillsLocalization.Get("dialog_info"),
+                        string.Format(SkillsLocalization.Get("agent_install_already_current"), SkillsLogger.Version),
+                        SkillsLocalization.Get("dialog_ok"));
+                    return true;
+                case SkillInstaller.InstalledVersionState.Newer:
+                    EditorUtility.DisplayDialog(SkillsLocalization.Get("dialog_info"),
+                        string.Format(SkillsLocalization.Get("agent_install_newer_kept"), installedVersion.Trim(), SkillsLogger.Version),
+                        SkillsLocalization.Get("dialog_ok"));
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         private void OnInstallClick(AgentConfig cfg, bool isGlobal, bool isUpdate)
         {
+            if (isUpdate && cfg.getPath != null && ShowSkipIfInstalledCopyIsCurrentOrNewer(cfg.getPath(isGlobal)))
+                return;
+
             var result = cfg.installFunc(isGlobal);
             if (result.success)
             {
@@ -379,6 +414,9 @@ namespace UnitySkills
                 EditorUtility.DisplayDialog(SkillsLocalization.Get("dialog_error"), msg, SkillsLocalization.Get("dialog_ok"));
                 return;
             }
+            if (File.Exists(Path.Combine(_customPath, "SKILL.md")) && ShowSkipIfInstalledCopyIsCurrentOrNewer(_customPath))
+                return;
+
             var result = SkillInstaller.InstallCustom(_customPath, _customName);
             if (result.success)
                 EditorUtility.DisplayDialog(SkillsLocalization.Get("dialog_success"), SkillsLocalization.Get("install_success"), SkillsLocalization.Get("dialog_ok"));

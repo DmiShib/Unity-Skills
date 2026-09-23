@@ -6,14 +6,14 @@ using System.Collections.Generic;
 namespace UnitySkills
 {
     /// <summary>
-    /// 地形技能——创建、修改与查询 TerrainData。
+    /// Terrain skills — create, modify, and query TerrainData.
     /// </summary>
     public static class TerrainSkills
     {
         [UnitySkill("terrain_create", "Create a new Terrain with TerrainData asset", TracksWorkflow = true,
             Category = SkillCategory.Terrain, Operation = SkillOperation.Create,
             Tags = new[] { "terrain", "heightmap", "landscape", "create" },
-            Outputs = new[] { "success", "name", "instanceId", "terrainDataPath", "size", "position" })]
+            Outputs = new[] { "success", "name", "instanceId", "terrainDataPath", "size", "position" }, MutatesScene = true, MutatesAssets = true)]
         public static object TerrainCreate(
             string name = "Terrain",
             int width = 500,
@@ -54,7 +54,7 @@ namespace UnitySkills
             Category = SkillCategory.Terrain, Operation = SkillOperation.Query,
             Tags = new[] { "terrain", "info", "resolution", "layers" },
             Outputs = new[] { "name", "size", "heightmapResolution", "terrainLayerCount", "layers" },
-            RequiresInput = new[] { "terrain" },
+            RequiresInput = new[] { "gameObject" },
             ReadOnly = true,
             Mode = SkillMode.SemiAuto)]
         public static object TerrainGetInfo(string name = null, int instanceId = 0)
@@ -102,7 +102,7 @@ namespace UnitySkills
             Category = SkillCategory.Terrain, Operation = SkillOperation.Query,
             Tags = new[] { "terrain", "height", "sample", "elevation" },
             Outputs = new[] { "height", "worldY" },
-            RequiresInput = new[] { "terrain" },
+            RequiresInput = new[] { "gameObject" },
             ReadOnly = true,
             Mode = SkillMode.SemiAuto)]
         public static object TerrainGetHeight(float worldX, float worldZ, string name = null, int instanceId = 0)
@@ -127,7 +127,7 @@ namespace UnitySkills
             Category = SkillCategory.Terrain, Operation = SkillOperation.Modify,
             Tags = new[] { "terrain", "height", "heightmap", "sculpt" },
             Outputs = new[] { "success", "normalizedX", "normalizedZ", "height", "pixelX", "pixelZ" },
-            RequiresInput = new[] { "terrain" })]
+            RequiresInput = new[] { "gameObject" }, MutatesAssets = true)]
         public static object TerrainSetHeight(
             float normalizedX, float normalizedZ, float height,
             string name = null, int instanceId = 0)
@@ -163,9 +163,9 @@ namespace UnitySkills
             Category = SkillCategory.Terrain, Operation = SkillOperation.Modify,
             Tags = new[] { "terrain", "height", "batch", "heightmap", "region" },
             Outputs = new[] { "success", "startX", "startZ", "modifiedWidth", "modifiedLength", "totalPointsModified" },
-            RequiresInput = new[] { "terrain" },
-            // SetHeights 写的是 TerrainData 资产（terrain_create 用 AssetDatabase.CreateAsset 建的），
-            // 场景里的 Terrain 组件不受影响。
+            RequiresInput = new[] { "gameObject" },
+            // SetHeights writes to the TerrainData asset (created by terrain_create via AssetDatabase.CreateAsset);
+            // the scene's Terrain component is unaffected.
             MutatesAssets = true)]
         public static object TerrainSetHeightsBatch(
             int startX, int startZ,
@@ -220,7 +220,7 @@ namespace UnitySkills
             Category = SkillCategory.Terrain, Operation = SkillOperation.Modify,
             Tags = new[] { "terrain", "hill", "sculpt", "heightmap" },
             Outputs = new[] { "success", "centerX", "centerZ", "radius", "height", "affectedArea" },
-            RequiresInput = new[] { "terrain" })]
+            RequiresInput = new[] { "gameObject" }, MutatesAssets = true)]
         public static object TerrainAddHill(
             float normalizedX, float normalizedZ,
             float radius = 0.2f,
@@ -251,7 +251,7 @@ namespace UnitySkills
 
             float[,] heights = data.GetHeights(startX, startZ, width, length);
 
-            // 叠加带平滑衰减的山丘
+            // Add a hill with a smooth falloff
             for (int z = 0; z < length; z++)
             {
                 for (int x = 0; x < width; x++)
@@ -265,7 +265,7 @@ namespace UnitySkills
 
                     if (distance <= 1f)
                     {
-                        // 用余弦插值做平滑衰减
+                        // Smooth falloff via cosine interpolation
                         float falloff = Mathf.Pow(Mathf.Cos(distance * Mathf.PI * 0.5f), smoothness);
                         float addHeight = height * falloff;
                         heights[z, x] = Mathf.Clamp01(heights[z, x] + addHeight);
@@ -290,7 +290,7 @@ namespace UnitySkills
             Category = SkillCategory.Terrain, Operation = SkillOperation.Execute,
             Tags = new[] { "terrain", "perlin", "noise", "procedural", "generation" },
             Outputs = new[] { "success", "resolution", "scale", "heightMultiplier", "octaves" },
-            RequiresInput = new[] { "terrain" })]
+            RequiresInput = new[] { "gameObject" }, MutatesAssets = true)]
         public static object TerrainGeneratePerlin(
             float scale = 20f,
             float heightMultiplier = 0.3f,
@@ -311,7 +311,7 @@ namespace UnitySkills
             int resolution = data.heightmapResolution;
             float[,] heights = new float[resolution, resolution];
 
-            // 用 seed 保证结果可复现
+            // Seed keeps the result reproducible
             System.Random random = seed != 0 ? new System.Random(seed) : new System.Random();
             float offsetX = random.Next(-10000, 10000);
             float offsetZ = random.Next(-10000, 10000);
@@ -324,7 +324,7 @@ namespace UnitySkills
                     float frequency = 1f;
                     float noiseHeight = 0f;
 
-                    // 叠加多个倍频的 Perlin 噪声
+                    // Stack multiple octaves of Perlin noise
                     for (int i = 0; i < octaves; i++)
                     {
                         float sampleX = (x / (float)resolution * scale + offsetX) * frequency;
@@ -360,7 +360,7 @@ namespace UnitySkills
             Category = SkillCategory.Terrain, Operation = SkillOperation.Modify,
             Tags = new[] { "terrain", "smooth", "heightmap", "sculpt" },
             Outputs = new[] { "success", "centerX", "centerZ", "radius", "iterations", "affectedArea" },
-            RequiresInput = new[] { "terrain" })]
+            RequiresInput = new[] { "gameObject" }, MutatesAssets = true)]
         public static object TerrainSmooth(
             float normalizedX, float normalizedZ,
             float radius = 0.1f,
@@ -397,7 +397,7 @@ namespace UnitySkills
                 {
                     for (int x = 0; x < width; x++)
                     {
-                        // 与周围 8 邻域取平均
+                        // Average with the surrounding 8-neighborhood
                         float sum = 0f;
                         for (int dz = 0; dz <= 2; dz++)
                         {
@@ -428,7 +428,7 @@ namespace UnitySkills
             Category = SkillCategory.Terrain, Operation = SkillOperation.Modify,
             Tags = new[] { "terrain", "flatten", "heightmap", "level" },
             Outputs = new[] { "success", "centerX", "centerZ", "targetHeight", "radius" },
-            RequiresInput = new[] { "terrain" })]
+            RequiresInput = new[] { "gameObject" }, MutatesAssets = true)]
         public static object TerrainFlatten(
             float normalizedX, float normalizedZ,
             float targetHeight = 0.5f,
@@ -495,7 +495,9 @@ namespace UnitySkills
             Category = SkillCategory.Terrain, Operation = SkillOperation.Modify,
             Tags = new[] { "terrain", "paint", "texture", "splat", "layer" },
             Outputs = new[] { "success", "layerIndex", "layerName", "brushSize", "strength" },
-            RequiresInput = new[] { "terrain", "terrainLayer" })]
+            // "terrainLayer" is dropped: layerIndex is a non-nullable int with no CLR default, so it's already
+            // auto-required by IsParameterRequired's value-type rule - the token enforced nothing extra.
+            RequiresInput = new[] { "gameObject" }, MutatesAssets = true)]
         public static object TerrainPaintTexture(
             float normalizedX, float normalizedZ,
             int layerIndex,
@@ -534,12 +536,12 @@ namespace UnitySkills
             {
                 for (int x = 0; x < width; x++)
                 {
-                    // 按衰减应用笔刷
+                    // Apply the brush with falloff
                     float dist = Vector2.Distance(new Vector2(x, z), new Vector2(width / 2f, height / 2f));
                     float falloff = Mathf.Clamp01(1f - dist / halfBrush);
                     float paintStrength = strength * falloff;
 
-                    // 削减其他层权重、提升目标层
+                    // Reduce other layers' weight, raise the target layer's
                     for (int l = 0; l < layerCount; l++)
                     {
                         if (l == layerIndex)
@@ -548,7 +550,7 @@ namespace UnitySkills
                             alphamaps[z, x, l] = Mathf.Lerp(alphamaps[z, x, l], 0f, paintStrength);
                     }
 
-                    // alphamap 要求同一像素各层权重和为 1，改完必须重新归一化
+                    // Alphamap requires each pixel's per-layer weights to sum to 1; must renormalize after editing
                     float sum = 0;
                     for (int l = 0; l < layerCount; l++) sum += alphamaps[z, x, l];
                     if (sum > 0)

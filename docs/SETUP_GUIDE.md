@@ -28,7 +28,7 @@ Choose one of the following:
 |---------|-----|
 | **Stable** (main) | `https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity` |
 | **Beta** (dev) | `https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity#beta` |
-| **Pinned version** | `https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity#v1.6.8` |
+| **Pinned version** | `https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity#v2.8.1` |
 
 You can also download a specific release from the [Releases page](https://github.com/Besty0728/Unity-Skills/releases).
 
@@ -70,13 +70,15 @@ Select your AI tool and click **Install**. The installer copies the `unity-skill
 
 ```
 SKILL.md                    # Main skill definition (AI reads this)
-skills/                     # Per-module skill docs (48 REST/module + 23 advisory)
+skills/                     # Per-module skill docs (54 REST module docs + 28 advisory = 82; 805 skills)
 scripts/unity_skills.py     # Python client library
 scripts/agent_config.json   # Agent configuration
 references/                 # Unity development references
 ```
 
-> **Auto-Sync on Package Update**: when the package version changes, every tool you already installed is refreshed to the new version on the next Editor load — you don't have to press Install again. Only existing installs are touched; a tool you never installed is never installed for you. Files are overwritten exactly as a manual Install would, so local edits to an installed copy are replaced. Toggle it off under ⚙ Settings ▸ AI Tools.
+> **Auto-Sync on Package Update**: when the package version changes, every tool you already installed is refreshed to the new version on the next Editor load — you don't have to press Install again. Only existing installs are touched; a tool you never installed is never installed for you. Files are overwritten exactly as a manual Install would, so local edits to an installed copy are replaced. Each copy is stamped with the package version that produced it: a copy shared between projects (global scope) that is already at this version or newer — say, refreshed by another project on a newer package — is left untouched, so a project still on an older package never downgrades it. The panel's Update button follows the same rule and tells you when there is nothing to do; to force a reinstall, Uninstall first. Toggle it off under ⚙ Settings ▸ AI Tools.
+
+> **Guide Line in Agent Instruction Files (opt-in, off by default)**: under ⚙ Settings ▸ AI Tools, "Write guide line to agent instruction files" makes Install and auto-sync also append one line — `When working on a Unity project, use Unity Skills.` — to each installed tool's root instruction file, so the AI proactively prefers Unity Skills. Project scope: `CLAUDE.md` for Claude Code, `AGENTS.md` shared by Codex / Antigravity / Cursor / OpenCode / Kimi Code. Global scope: `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.config/opencode/AGENTS.md`, `~/.kimi-code/AGENTS.md` (Cursor has no reliable global mechanism and is skipped). Enabling the toggle writes to every installed tool immediately; disabling it removes the marked line again — a file that held nothing but the line is deleted.
 
 > **Codex Note**: Antigravity and Codex share `.agents/skills/` in workspace mode — install once for either makes it available to both. Codex auto-discovers skills; no `AGENTS.md` declaration needed.
 
@@ -332,4 +334,4 @@ unity_skills.wait_for_job(job["jobId"], timeout=90)
 | [README_CN.md](../README_CN.md) | Project overview (Chinese) |
 | [SKILL.md](../SkillsForUnity/unity-skills~/SKILL.md) | Complete skill API reference |
 | [CHANGELOG.md](../CHANGELOG.md) | Version history |
-| [agent.md](../agent.md) | AI agent project overview |
+| [AGENTS.md](../AGENTS.md) | AI agent project overview |

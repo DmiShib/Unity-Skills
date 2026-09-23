@@ -8,13 +8,13 @@ using UnityEngine;
 namespace UnitySkills.Tests.Core
 {
     /// <summary>
-    /// 直调 SkillRouter.Execute 的端到端覆盖（不经 HTTP 层，仅 EditMode）：
-    /// 真正只读的 skill 在任何操作模式下都照常执行；未知参数在模式闸门之前就被拒；
-    /// Approval 模式的 MODE_RESTRICTED 路径必须真的挡住 FullAuto skill 的副作用，
-    /// 而不是一边返回错误一边照样改了场景。
+    /// End-to-end coverage calling SkillRouter.Execute directly (not through the HTTP layer, EditMode only):
+    /// a genuinely read-only skill executes normally in any operating mode; unknown parameters are rejected before
+    /// the mode gate is even reached; Approval mode's MODE_RESTRICTED path must actually block a FullAuto skill's
+    /// side effects, rather than returning an error while still mutating the scene anyway.
     ///
-    /// 绝不假设当前是 Bypass 模式、也不假设存在任何既有场景/资源——每个用例都显式设置
-    /// SkillsModeManager.CurrentMode，并在全新空场景上跑。
+    /// Never assumes the current mode is Bypass, nor that any pre-existing scene/asset exists - every test case
+    /// explicitly sets SkillsModeManager.CurrentMode and runs on a brand-new empty scene.
     /// </summary>
     [TestFixture]
     public class SkillRouterExecuteEndToEndTests
@@ -27,6 +27,7 @@ namespace UnitySkills.Tests.Core
         private string _savedMode;
         private bool _hadPanelApproval;
         private bool _savedPanelApproval;
+        private SurfaceProfileKind _savedProfile;
 
         [OneTimeSetUp]
         public void OneTimeSetUp()
@@ -53,6 +54,12 @@ namespace UnitySkills.Tests.Core
             SkillsModeManager.ResetForTests();
             SkillsModeManager.ExistingInstallOverrideForTests = false;
             SkillsAuditLog.ResetForTests();
+            // The mode-gate assertions below drive gameobject_create, which the Guide / NoSceneAuthoring
+            // profiles withdraw before the mode gate is ever consulted (SURFACE_EXCLUDED instead of
+            // MODE_RESTRICTED). Pin Full so the tests see the gate they're written against; the pref is
+            // global to the machine, so restore it in TearDown.
+            _savedProfile = SkillsSurfaceProfile.Current;
+            SkillsSurfaceProfile.Current = SurfaceProfileKind.Full;
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             GameObjectFinder.InvalidateCache();
         }
@@ -60,6 +67,7 @@ namespace UnitySkills.Tests.Core
         [TearDown]
         public void TearDown()
         {
+            SkillsSurfaceProfile.Current = _savedProfile;
             for (var i = 0; i < 3; i++)
                 AssetDatabase.DeleteAsset($"{PaginationAssetPrefix}{i}.txt");
             SkillsModeManager.ClearOneShotBypass();
@@ -124,9 +132,11 @@ namespace UnitySkills.Tests.Core
         {
             SkillsModeManager.CurrentMode = SkillsOperatingMode.Bypass;
             bool saved = SkillRouter.SummaryAutoTruncate;
+            int savedPage = SkillRouter.SummaryPageSize;
             try
             {
                 SkillRouter.SummaryAutoTruncate = true;
+                SkillRouter.SummaryPageSize = 5;
 
                 var response = JObject.Parse(SkillRouter.Execute("asset_find",
                     "{\"searchFilter\":\"\",\"limit\":15,\"verbose\":false}"));
@@ -141,6 +151,61 @@ namespace UnitySkills.Tests.Core
             finally
             {
                 SkillRouter.SummaryAutoTruncate = saved;
+                SkillRouter.SummaryPageSize = savedPage;
+            }
+        }
+
+        [Test]
+        public void Execute_SummaryAutoTruncateOn_ArrayOverPageSizeIsTruncated()
+        {
+            // The truncation trigger follows the configurable SummaryPageSize rather than a hardcoded 10:
+            // with PageSize=5, a 7-item array must already be over the threshold.
+            SkillsModeManager.CurrentMode = SkillsOperatingMode.Bypass;
+            bool saved = SkillRouter.SummaryAutoTruncate;
+            int savedPage = SkillRouter.SummaryPageSize;
+            try
+            {
+                SkillRouter.SummaryAutoTruncate = true;
+                SkillRouter.SummaryPageSize = 5;
+
+                var response = JObject.Parse(SkillRouter.Execute("asset_find",
+                    "{\"searchFilter\":\"\",\"limit\":7,\"verbose\":false}"));
+
+                Assert.That(response["status"]?.ToString(), Is.EqualTo("success"));
+                Assert.That(response["result"]?["isTruncated"]?.Value<bool>(), Is.True);
+                Assert.That(response["result"]?["assets"], Has.Count.EqualTo(5));
+                Assert.That(response["result"]?["totalCount"]?.Value<int>(), Is.EqualTo(7));
+            }
+            finally
+            {
+                SkillRouter.SummaryAutoTruncate = saved;
+                SkillRouter.SummaryPageSize = savedPage;
+            }
+        }
+
+        [Test]
+        public void Execute_SummaryAutoTruncateOn_ArrayUnderLargerPageSizePassesThrough()
+        {
+            // With PageSize=20, a 12-item array is below the threshold and must not be truncated at all.
+            SkillsModeManager.CurrentMode = SkillsOperatingMode.Bypass;
+            bool saved = SkillRouter.SummaryAutoTruncate;
+            int savedPage = SkillRouter.SummaryPageSize;
+            try
+            {
+                SkillRouter.SummaryAutoTruncate = true;
+                SkillRouter.SummaryPageSize = 20;
+
+                var response = JObject.Parse(SkillRouter.Execute("asset_find",
+                    "{\"searchFilter\":\"\",\"limit\":12,\"verbose\":false}"));
+
+                Assert.That(response["status"]?.ToString(), Is.EqualTo("success"));
+                Assert.That(response["result"]?["assets"], Has.Count.EqualTo(12));
+                Assert.That(response["result"]?["isTruncated"], Is.Null);
+            }
+            finally
+            {
+                SkillRouter.SummaryAutoTruncate = saved;
+                SkillRouter.SummaryPageSize = savedPage;
             }
         }
 

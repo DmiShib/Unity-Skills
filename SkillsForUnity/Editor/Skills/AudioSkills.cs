@@ -7,7 +7,7 @@ using UnitySkills.Internal;
 namespace UnitySkills
 {
     /// <summary>
-    /// 音频导入设置技能：读写 AudioImporter 属性。
+    /// Audio import settings skills: read/write AudioImporter properties.
     /// </summary>
     public static class AudioSkills
     {
@@ -15,7 +15,7 @@ namespace UnitySkills
             Category = SkillCategory.Audio, Operation = SkillOperation.Query,
             Tags = new[] { "audio", "import", "settings", "clip" },
             Outputs = new[] { "path", "forceToMono", "loadType", "compressionFormat", "quality" },
-            RequiresInput = new[] { "audioAsset" },
+            RequiresInput = new[] { "assetPath" },
             ReadOnly = true,
             Mode = SkillMode.SemiAuto)]
         public static object AudioGetSettings(string assetPath)
@@ -46,7 +46,8 @@ namespace UnitySkills
             Category = SkillCategory.Audio, Operation = SkillOperation.Modify,
             Tags = new[] { "audio", "import", "settings", "compression", "quality" },
             Outputs = new[] { "success", "path", "changesApplied", "changes" },
-            RequiresInput = new[] { "audioAsset" })]
+            RequiresInput = new[] { "assetPath" },
+            MutatesAssets = true)]
         public static object AudioSetSettings(
             string assetPath,
             bool? forceToMono = null,
@@ -63,8 +64,8 @@ namespace UnitySkills
             if (importer == null)
                 return new { error = $"Not an audio file or asset not found: {assetPath}" };
 
-            // 三个枚举必须在第一次赋值之前全部解析完，否则报错时
-            // forceToMono/loadInBackground/ambisonic 已经写进导入器了。
+            // All three enums must be fully parsed before the first assignment, otherwise an error
+            // would leave forceToMono/loadInBackground/ambisonic already written to the importer.
             if (!SkillParamUtil.TryParseOptionalEnum<AudioClipLoadType>(loadType, "loadType", out var lt, out var ltError))
                 return ltError;
             if (!SkillParamUtil.TryParseOptionalEnum<AudioCompressionFormat>(compressionFormat, "compressionFormat", out var cf, out var cfError))
@@ -143,7 +144,8 @@ namespace UnitySkills
             Category = SkillCategory.Audio, Operation = SkillOperation.Modify,
             Tags = new[] { "audio", "import", "batch", "settings", "bulk" },
             Outputs = new[] { "totalItems", "successCount", "results" },
-            RequiresInput = new[] { "audioAssets" })]
+            RequiresInput = new[] { "items" },
+            MutatesAssets = true)]
         public static object AudioSetSettingsBatch(string items)
         {
             return BatchExecutor.Execute<BatchAudioItem>(items, item =>
@@ -152,8 +154,8 @@ namespace UnitySkills
                 if (importer == null)
                     throw new System.Exception("Not an audio file");
 
-                // 在写入任何属性之前解析，并把出错项的 assetPath 带上，
-                // 免得枚举拼错的条目被报成成功。
+                // Parse before writing any property, and attach the failing item's assetPath,
+                // so a misspelled enum entry isn't reported as a success.
                 if (!SkillParamUtil.TryParseOptionalEnum<AudioClipLoadType>(item.loadType, "loadType", out var lt, out _))
                     return SkillParamUtil.InvalidEnumError<AudioClipLoadType>(item.loadType, "loadType", item.assetPath);
                 if (!SkillParamUtil.TryParseOptionalEnum<AudioCompressionFormat>(item.compressionFormat, "compressionFormat", out var cf, out _))
@@ -213,7 +215,7 @@ namespace UnitySkills
             Category = SkillCategory.Audio, Operation = SkillOperation.Query,
             Tags = new[] { "audio", "clip", "info", "inspect" },
             Outputs = new[] { "name", "path", "length", "channels", "frequency", "samples", "loadType" },
-            RequiresInput = new[] { "audioAsset" },
+            RequiresInput = new[] { "assetPath" },
             ReadOnly = true,
             Mode = SkillMode.SemiAuto)]
         public static object AudioGetClipInfo(string assetPath)
@@ -232,15 +234,17 @@ namespace UnitySkills
             Tags = new[] { "audio", "source", "add", "component", "playback" },
             Outputs = new[] { "success", "gameObject", "instanceId" },
             RequiresInput = new[] { "gameObject" },
-            TracksWorkflow = true)]
+            TracksWorkflow = true, MutatesScene = true)]
         public static object AudioAddSource(string name = null, int instanceId = 0, string path = null, string clipPath = null, bool playOnAwake = false, bool loop = false, float volume = 1f)
         {
             var (go, error) = GameObjectFinder.FindOrError(name, instanceId, path);
             if (error != null) return error;
 
-            // clipPath 给了却解析不到时必须在 AddComponent 之前就拒绝：否则组件已经加上去
-            // （真实副作用），而 clip 被静默丢弃，调用方看不出播放其实是静音的。
-            // 与本仓库其余 setter 一致——目标解析不到就整体拒绝，不做部分生效。
+            // If clipPath is given but doesn't resolve, this must be rejected before AddComponent: otherwise
+            // the component would already be added (a real side effect) while clip is silently dropped, and
+            // the caller has no way to tell that playback is actually silent.
+            // Consistent with every other setter in this repo: if the target doesn't resolve, reject the whole
+            // call rather than applying it partially.
             AudioClip clip = null;
             if (!string.IsNullOrEmpty(clipPath))
             {
@@ -285,7 +289,7 @@ namespace UnitySkills
             Tags = new[] { "audio", "source", "property", "volume", "pitch" },
             Outputs = new[] { "success", "gameObject" },
             RequiresInput = new[] { "gameObject" },
-            TracksWorkflow = true)]
+            TracksWorkflow = true, MutatesScene = true)]
         public static object AudioSetSourceProperties(string name = null, int instanceId = 0, string path = null, string clipPath = null,
             float? volume = null, float? pitch = null, bool? loop = null, bool? playOnAwake = null, bool? mute = null, float? spatialBlend = null, int? priority = null)
         {
@@ -323,7 +327,7 @@ namespace UnitySkills
             Category = SkillCategory.Audio, Operation = SkillOperation.Create,
             Tags = new[] { "audio", "mixer", "create", "asset" },
             Outputs = new[] { "success", "path", "name" },
-            TracksWorkflow = true)]
+            TracksWorkflow = true, MutatesAssets = true)]
         public static object AudioCreateMixer(string mixerName = "NewAudioMixer", string folder = "Assets")
         {
             if (Validate.Required(mixerName, "mixerName") is object nameErr) return nameErr;
@@ -335,7 +339,7 @@ namespace UnitySkills
             var savePath = System.IO.Path.Combine(folder, mixerName + ".mixer").Replace("\\", "/");
             if (System.IO.File.Exists(savePath)) return new { error = $"Mixer already exists: {savePath}" };
 
-            // AudioMixerController 所在程序集随 Unity 版本变化，只能遍历全部程序集查找。
+            // The assembly AudioMixerController lives in varies by Unity version, so we have to scan all assemblies for it.
             System.Type mixerType = null;
             foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -344,7 +348,7 @@ namespace UnitySkills
             }
             if (mixerType == null) return new { error = "AudioMixerController type not found" };
 
-            // CreateMixerControllerAtPath 是官方内部工厂方法，优先走它。
+            // CreateMixerControllerAtPath is the official internal factory method; prefer it.
             var createMethod = mixerType.GetMethod("CreateMixerControllerAtPath",
                 System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
             if (createMethod != null)
@@ -357,7 +361,7 @@ namespace UnitySkills
                 }
             }
 
-            // 兜底：直接 CreateInstance（Unity 6 下可能打警告）。
+            // Fallback: create the instance directly (may log a warning on Unity 6).
             var mixer = ScriptableObject.CreateInstance(mixerType);
             if (mixer != null)
             {

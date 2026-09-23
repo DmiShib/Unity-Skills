@@ -10,7 +10,7 @@ using UnityEngine.Rendering;
 namespace UnitySkills
 {
     /// <summary>
-    /// 基于 Volume 框架的现代 SRP 后处理技能。
+    /// Modern SRP post-processing skills built on the Volume framework.
     /// </summary>
     public static class PostProcessSkills
     {
@@ -26,14 +26,18 @@ namespace UnitySkills
         [UnitySkill("postprocess_add_effect", "Add a post-processing effect override to a VolumeProfile",
             Category = SkillCategory.PostProcess, Operation = SkillOperation.Create,
             Tags = new[] { "postprocess", "effect", "add", "profile" },
-            Outputs = new[] { "effectType", "profilePath" })]
+            Outputs = new[] { "effectType", "profilePath" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object PostProcessAddEffect(string profilePath, string effectType, bool overrides = true) => RenderPipelineSkillsCommon.NoSRP();
 
         [UnitySkill("postprocess_remove_effect", "Remove a post-processing effect override from a VolumeProfile",
             Category = SkillCategory.PostProcess, Operation = SkillOperation.Delete,
             Tags = new[] { "postprocess", "effect", "remove", "profile" },
             Outputs = new[] { "effectType", "profilePath" },
-            RiskLevel = "medium")]
+            RiskLevel = "medium",
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object PostProcessRemoveEffect(string profilePath, string effectType) => RenderPipelineSkillsCommon.NoSRP();
 
         [UnitySkill("postprocess_get_effect", "Inspect a post-processing effect override on a VolumeProfile",
@@ -47,37 +51,49 @@ namespace UnitySkills
         [UnitySkill("postprocess_set_parameter", "Set a parameter on a post-processing effect override",
             Category = SkillCategory.PostProcess, Operation = SkillOperation.Modify,
             Tags = new[] { "postprocess", "effect", "parameter", "set" },
-            Outputs = new[] { "effectType", "parameterName", "value" })]
+            Outputs = new[] { "effectType", "parameterName", "value" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object PostProcessSetParameter(string profilePath, string effectType, string parameterName, object value, bool? overrideState = true) => RenderPipelineSkillsCommon.NoSRP();
 
         [UnitySkill("postprocess_set_bloom", "Configure the Bloom post-processing effect",
             Category = SkillCategory.PostProcess, Operation = SkillOperation.Modify,
             Tags = new[] { "postprocess", "bloom", "configure" },
-            Outputs = new[] { "effectType", "parameters" })]
+            Outputs = new[] { "effectType", "parameters" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object PostProcessSetBloom(string profilePath, float? intensity = null, float? threshold = null, float? scatter = null, string tint = null) => RenderPipelineSkillsCommon.NoSRP();
 
         [UnitySkill("postprocess_set_depth_of_field", "Configure the Depth Of Field post-processing effect",
             Category = SkillCategory.PostProcess, Operation = SkillOperation.Modify,
             Tags = new[] { "postprocess", "depth of field", "configure" },
-            Outputs = new[] { "effectType", "parameters" })]
+            Outputs = new[] { "effectType", "parameters" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object PostProcessSetDepthOfField(string profilePath, string mode = null, float? focusDistance = null, float? gaussianStart = null, float? gaussianEnd = null) => RenderPipelineSkillsCommon.NoSRP();
 
         [UnitySkill("postprocess_set_tonemapping", "Configure the Tonemapping post-processing effect",
             Category = SkillCategory.PostProcess, Operation = SkillOperation.Modify,
             Tags = new[] { "postprocess", "tonemapping", "configure" },
-            Outputs = new[] { "effectType", "parameters" })]
+            Outputs = new[] { "effectType", "parameters" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object PostProcessSetTonemapping(string profilePath, string mode = null) => RenderPipelineSkillsCommon.NoSRP();
 
         [UnitySkill("postprocess_set_vignette", "Configure the Vignette post-processing effect",
             Category = SkillCategory.PostProcess, Operation = SkillOperation.Modify,
             Tags = new[] { "postprocess", "vignette", "configure" },
-            Outputs = new[] { "effectType", "parameters" })]
+            Outputs = new[] { "effectType", "parameters" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object PostProcessSetVignette(string profilePath, float? intensity = null, float? smoothness = null, string color = null, string center = null, bool? rounded = null) => RenderPipelineSkillsCommon.NoSRP();
 
         [UnitySkill("postprocess_set_color_adjustments", "Configure the Color Adjustments post-processing effect",
             Category = SkillCategory.PostProcess, Operation = SkillOperation.Modify,
             Tags = new[] { "postprocess", "color adjustments", "configure" },
-            Outputs = new[] { "effectType", "parameters" })]
+            Outputs = new[] { "effectType", "parameters" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object PostProcessSetColorAdjustments(string profilePath, float? postExposure = null, float? contrast = null, string colorFilter = null, float? hueShift = null, float? saturation = null) => RenderPipelineSkillsCommon.NoSRP();
 #else
         [UnitySkill("postprocess_list_effects", "List post-processing effects supported by the active SRP pipeline",
@@ -330,15 +346,18 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 在 <see cref="SetParameter"/> 调入 RenderPipelineSkillsCommon 之前，先校验枚举形态的
-        /// "mode" 类参数。没有这一步，非法字符串（mode="NotARealMode"）会在该 helper 深处的
-        /// Enum.Parse 失败，而 SetParameter 的别名循环把每次尝试的错误丢弃（<c>out _</c>），
-        /// 调用方最终只看到 "None of the parameters matched: mode, focusMode"（SKILL_ERROR/abort）——
-        /// 值非法与组件压根没这个参数，两种情况读起来一模一样。此处反射组件自身的字段拿到真实枚举
-        /// 类型（正是 RenderPipelineSkillsCommon.TrySetVolumeParameter 将要写入的那个字段），
-        /// 非法值于是能拿到模块统一的 SEMANTIC_INVALID + validValues 形态。
-        /// <paramref name="parameterNames"/> 是按顺序尝试的别名（URP/HDRP 字段名不同），
-        /// 该组件上第一个存在的字段决定取值词表。
+        /// Validates enum-shaped "mode" parameters before <see cref="SetParameter"/> hands them
+        /// to RenderPipelineSkillsCommon. Without this step, an invalid string
+        /// (mode="NotARealMode") would fail deep inside that helper's Enum.Parse, and
+        /// SetParameter's alias loop discards each attempt's error (<c>out _</c>) — the caller
+        /// would ultimately only see "None of the parameters matched: mode, focusMode"
+        /// (SKILL_ERROR/abort), making an invalid value and the component simply not having this
+        /// parameter read identically. Here we reflect into the component's own field to get the
+        /// real enum type (the very field RenderPipelineSkillsCommon.TrySetVolumeParameter is
+        /// about to write), so an invalid value gets the module's standard
+        /// SEMANTIC_INVALID + validValues shape. <paramref name="parameterNames"/> is the list of
+        /// aliases tried in order (URP/HDRP field names differ); the first field that exists on
+        /// this component decides the value vocabulary used.
         /// </summary>
         private static object ValidateModeParameter(VolumeComponent component, string value, params string[] parameterNames)
         {

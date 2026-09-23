@@ -8,28 +8,37 @@ using UnityEngine;
 namespace UnitySkills
 {
     /// <summary>
-    /// 包升级后自动把"已安装"的 AI 工具副本刷新到当前版本，省掉用户再去面板点一次安装。
+    /// After a package upgrade, automatically refreshes "installed" AI tool copies to the current version, sparing
+    /// the user a trip back to the panel to click install again.
     ///
-    /// 触发点是 [InitializeOnLoadMethod]，每次域重载都会跑，所以同版本的快路径只做一次
-    /// 小文件读取就返回。版本记录写在 Library/UnitySkills/install_sync.json（按项目存放、
-    /// 不进 git），而不是 EditorPrefs —— 后者按机器全局存，同一台机器上双开项目会互相覆盖。
+    /// Triggered via [InitializeOnLoadMethod], which runs on every domain reload, so the fast path for an
+    /// unchanged version only does one small file read before returning. The version record is written to
+    /// Library/UnitySkills/install_sync.json (per-project, not committed to git), not to EditorPrefs — the
+    /// latter is stored globally per machine, so having two projects open on the same machine would overwrite each other's record.
     ///
-    /// 覆盖语义与面板手动点"安装"完全一致：现有安装机制没有内容清单可判断用户是否手改过
-    /// 副本，本服务不另造一套 hash 校验，直接覆盖。只更新检测为已安装的目标，从不自动安装
-    /// 新目标；全程主线程、无模态弹窗，单个目标失败只跳过它自己。
+    /// Overwrite semantics are identical to manually clicking "Install" in the panel: the existing install
+    /// mechanism has no content manifest to tell whether the user hand-edited a copy, and this service doesn't
+    /// build a separate hash-check scheme — it just overwrites. Only targets detected as already installed are
+    /// refreshed; new targets are never auto-installed. Everything runs on the main thread with no modal
+    /// dialogs; a single target's failure only skips that target.
+    ///
+    /// Global-scope targets (~/.claude/skills etc.) are shared by every project on the machine, so the per-project
+    /// record alone can't be trusted: a project still on an older package would otherwise downgrade a copy that a
+    /// newer project already refreshed. Each copy therefore carries its own version stamp
+    /// (<see cref="SkillInstaller.ReadInstalledVersion"/>) and is only rewritten when it is older than this package.
     /// </summary>
     public static class SkillInstallSyncService
     {
         public const int StateSchemaVersion = 1;
 
-        // SessionState 跨域重载存活、编辑器重启才清空：本会话尝试过就不再重复，
-        // 避免同步持续失败时每次重编译都重跑一轮文件复制。
+        // Survives across domain reloads via SessionState, cleared only on editor restart: once attempted this
+        // session, it won't retry, avoiding a full file-copy pass on every recompile while sync keeps failing.
         private const string SessionAttemptedKey = "UnitySkills.InstallSync.Attempted";
 
         private static readonly string DefaultStateDir =
             Path.Combine(Application.dataPath, "../Library/UnitySkills");
 
-        /// <summary>测试专用：把状态文件重定向到临时目录，避免碰真实工程记录。</summary>
+        /// <summary>Test-only: redirects the state file to a temp directory, to avoid touching real project records.</summary>
         internal static string StateFilePathOverride;
 
         internal static string StateFilePath =>
@@ -37,18 +46,18 @@ namespace UnitySkills
 
         private static string _prefEnabled;
 
-        // 与 SkillsHttpServer 同款键式：带 InstanceId，天然按项目隔离。
+        // Same key pattern as SkillsHttpServer: includes InstanceId, so it's naturally isolated per project.
         internal static string PrefEnabled =>
             _prefEnabled ??= $"UnitySkills_{RegistryService.InstanceId}_AutoSyncInstalls";
 
-        /// <summary>是否在包升级后自动同步已安装的 AI 工具。默认开启。</summary>
+        /// <summary>Whether installed AI tools are auto-synced after a package upgrade. Enabled by default.</summary>
         public static bool Enabled
         {
             get => EditorPrefs.GetBool(PrefEnabled, true);
             set => EditorPrefs.SetBool(PrefEnabled, value);
         }
 
-        // ===== 状态模型（Newtonsoft 序列化，字段名即 JSON key）=====
+        // ===== State model (Newtonsoft-serialized, field names are the JSON keys) =====
 
         public class SyncState
         {
@@ -58,16 +67,19 @@ namespace UnitySkills
             public List<string> lastSyncedTargets = new List<string>();
         }
 
-        /// <summary>一轮同步的结果。</summary>
+        /// <summary>The result of one sync pass.</summary>
         public sealed class SyncReport
         {
             public readonly List<string> Updated = new List<string>();
             public readonly List<string> Failed = new List<string>();
+            /// <summary>Copies already carrying a newer version than this package ("DisplayName (x.y.z)"), left untouched.</summary>
+            public readonly List<string> SkippedNewer = new List<string>();
+            public int SkippedUpToDate;
             public int SkippedNotInstalled;
             public int SkippedDuplicatePath;
         }
 
-        // ===== 触发 =====
+        // ===== Trigger =====
 
         [InitializeOnLoadMethod]
         private static void InitializeOnLoad()
@@ -81,8 +93,8 @@ namespace UnitySkills
                     return;
                 SessionState.SetBool(SessionAttemptedKey, true);
 
-                // 延后一拍到编辑器就绪：InitializeOnLoad 期间 PackageManager 的包信息
-                // 不保证可查，而模板根目录的解析依赖它。
+                // Deferred one tick until the editor is ready: PackageManager's package info isn't guaranteed
+                // to be queryable during InitializeOnLoad, and resolving the template root directory depends on it.
                 EditorApplication.delayCall += RunSyncOnce;
             }
             catch (Exception ex)
@@ -92,19 +104,21 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 域重载即时门，无副作用：batchmode 排除 → 版本比对 → 用户开关。三项全过才值得排一次同步。
+        /// The instant domain-reload gate, with no side effects: batchmode exclusion → version comparison →
+        /// user toggle. Only worth queuing a sync if all three pass.
         ///
-        /// 开关判断排在 SessionState 之前（见调用方）：否则关着开关的会话会把"已尝试"标记提前落下，
-        /// 用户中途打开开关后要等到编辑器重启才生效。
+        /// The toggle check comes after the SessionState check (see caller): otherwise a session with the
+        /// toggle off would prematurely set the "attempted" flag, and a user who flips the toggle on mid-session
+        /// would have to wait for an editor restart for it to take effect.
         /// </summary>
         internal static bool ShouldSyncNow(bool batchMode)
         {
-            // batchmode 排除：`unity test` / `run` / `build` 等无头流程同样跑 InitializeOnLoad，
-            // 不该让一次 CI 构建去改写用户主目录下的 skill 副本。
+            // batchmode exclusion: headless flows like `unity test` / `run` / `build` also run
+            // InitializeOnLoad; a CI build shouldn't get to rewrite the skill copies in the user's home directory.
             if (batchMode)
                 return false;
 
-            // 快路径：版本没变就到此为止，整条路径只花一次小文件读取。
+            // Fast path: stop here if the version hasn't changed — the whole path only costs one small file read.
             if (!NeedsSync(ReadRecordedVersion(), SkillsLogger.Version))
                 return false;
 
@@ -118,8 +132,8 @@ namespace UnitySkills
                 var report = SyncTargets(SkillInstaller.EnumerateTargets());
                 LogReport(report);
 
-                // 有目标失败就不写记录，把重试留给下一次编辑器会话（本会话已被
-                // SessionState 拦住，不会立刻重跑）。
+                // Don't write the record if any target failed — leave the retry for the next editor session
+                // (this session is already blocked by SessionState and won't immediately re-run).
                 if (report.Failed.Count == 0)
                     WriteState(SkillsLogger.Version, report.Updated);
             }
@@ -129,16 +143,28 @@ namespace UnitySkills
             }
         }
 
-        // ===== 核心逻辑（可注入目标，便于测试）=====
+        // ===== Core logic (targets are injectable, to ease testing) =====
 
-        /// <summary>记录版本与当前版本不同（含记录缺失）时需要同步。</summary>
+        /// <summary>Sync is needed when the recorded version differs from the current version (including when the record is missing).</summary>
         internal static bool NeedsSync(string recordedVersion, string currentVersion)
         {
             return !string.Equals(recordedVersion, currentVersion, StringComparison.Ordinal);
         }
 
         /// <summary>
-        /// 对已安装的目标逐个执行安装（= 覆盖更新）。未安装的目标一律跳过，绝不新装。
+        /// A copy is only rewritten when it is strictly older than the current package. An unknown or unparseable
+        /// installed version is treated as an old copy and refreshed, which matches the behavior before version
+        /// stamps existed. The comparison itself lives in <see cref="SkillInstaller.CompareInstalledVersion"/>.
+        /// </summary>
+        internal static bool ShouldRefreshTarget(string installedVersion, string currentVersion)
+        {
+            var state = SkillInstaller.CompareInstalledVersion(installedVersion, currentVersion);
+            return state == SkillInstaller.InstalledVersionState.Unknown || state == SkillInstaller.InstalledVersionState.Older;
+        }
+
+        /// <summary>
+        /// Runs install (= overwrite update) on each already-installed target whose copy is older than the current
+        /// package, one by one. Uninstalled targets are always skipped, never freshly installed.
         /// </summary>
         internal static SyncReport SyncTargets(IEnumerable<SkillInstaller.InstallTarget> targets)
         {
@@ -146,8 +172,8 @@ namespace UnitySkills
             if (targets == null)
                 return report;
 
-            // Codex 与 Antigravity 的项目级目标指向同一个 .agents/skills 目录，
-            // 按规范化全路径去重，免得同一份文件被复制两遍、日志还重复计数。
+            // Codex and Antigravity's project-level targets both point at the same .agents/skills directory;
+            // dedupe by normalized full path so the same file isn't copied twice and double-counted in the log.
             var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var target in targets)
@@ -173,6 +199,17 @@ namespace UnitySkills
                         continue;
                     }
 
+                    var installedVersion = target.InstalledVersion?.Invoke();
+                    switch (SkillInstaller.CompareInstalledVersion(installedVersion, SkillsLogger.Version))
+                    {
+                        case SkillInstaller.InstalledVersionState.Current:
+                            report.SkippedUpToDate++;
+                            continue;
+                        case SkillInstaller.InstalledVersionState.Newer:
+                            report.SkippedNewer.Add($"{target.DisplayName} ({installedVersion.Trim()})");
+                            continue;
+                    }
+
                     var (success, message) = target.Install();
                     if (success)
                         report.Updated.Add(target.DisplayName);
@@ -188,9 +225,10 @@ namespace UnitySkills
             return report;
         }
 
-        // 日志文案跟随面板语言（SkillsLocalization.Current）。字符串内联在本文件而非 Localization.cs：
-        // Console 用 Unity 内置字体，不吃面板字体图集；进 Localization.cs 会被
-        // UISkillsFontAssetBaker 当 UI 字符收集、强制图集覆盖这些字形。
+        // Log text follows the panel language (SkillsLocalization.Current). Strings are inlined in this file
+        // rather than in Localization.cs: the Console uses Unity's built-in font, not the panel's font atlas;
+        // putting them in Localization.cs would get these glyphs collected as UI characters by
+        // UISkillsFontAssetBaker and forced into the atlas.
         private static string L(string en, string zh, string ru)
         {
             switch (SkillsLocalization.Current)
@@ -213,13 +251,30 @@ namespace UnitySkills
                       "Автосинхронизация AI-инструментов: обновлено установленных целей: {0}, версия {1} — {2}"),
                     report.Updated.Count, version, string.Join(", ", report.Updated)));
             }
-            else if (report.Failed.Count == 0)
+            else if (report.Failed.Count == 0 && report.SkippedNewer.Count == 0 && report.SkippedUpToDate == 0)
             {
                 SkillsLogger.LogVerbose(string.Format(
                     L("AI tool auto-sync: no installed AI tool copies found, nothing to update for {0}.",
                       "AI 工具自动同步：未检测到已安装的 AI 工具副本，{0} 无需更新。",
                       "Автосинхронизация AI-инструментов: установленных копий не найдено, для {0} обновлять нечего."),
                     version));
+            }
+            else if (report.Failed.Count == 0 && report.SkippedNewer.Count == 0)
+            {
+                SkillsLogger.LogVerbose(string.Format(
+                    L("AI tool auto-sync: {0} installed target(s) already at {1}, nothing to update.",
+                      "AI 工具自动同步：{0} 个已安装目标已是 {1}，无需更新。",
+                      "Автосинхронизация AI-инструментов: установленных целей уже на версии {1}: {0}, обновлять нечего."),
+                    report.SkippedUpToDate, version));
+            }
+
+            if (report.SkippedNewer.Count > 0)
+            {
+                SkillsLogger.Log(string.Format(
+                    L("AI tool auto-sync: {0} target(s) already carry a newer copy installed by another project — {1}; left untouched by {2}.",
+                      "AI 工具自动同步：{0} 个目标已由其他工程安装了更新的副本 —— {1}；{2} 未覆盖。",
+                      "Автосинхронизация AI-инструментов: у целей ({0}) уже установлена более новая копия из другого проекта — {1}; версия {2} их не трогает."),
+                    report.SkippedNewer.Count, string.Join(", ", report.SkippedNewer), version));
             }
 
             if (report.Failed.Count > 0)
@@ -232,9 +287,9 @@ namespace UnitySkills
             }
         }
 
-        // ===== 状态文件 =====
+        // ===== State file =====
 
-        /// <summary>读取上次自动同步的版本号；记录缺失或损坏时返回 null。</summary>
+        /// <summary>Reads the version last auto-synced; returns null if the record is missing or corrupted.</summary>
         internal static string ReadRecordedVersion()
         {
             try
@@ -248,7 +303,7 @@ namespace UnitySkills
             }
             catch
             {
-                // 记录损坏等价于没有记录：下一轮同步会把它整个重写。
+                // A corrupted record is treated as no record: the next sync pass will rewrite it entirely.
                 return null;
             }
         }

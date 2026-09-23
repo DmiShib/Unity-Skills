@@ -8,7 +8,7 @@ Use this skill when the user wants to automate the Unity Editor through the loca
 
 Before the first skill call in a session:
 
-1. **`GET /health`** — discover the server (ports `8090`–`8100`) and read `currentMode` (`"approval"` / `"auto"` / `"bypass"`), `panelApprovalRequired`, and `pendingCount`.
+1. **`GET /health`** — discover the server (ports `8090`–`8100`) and read `currentMode` (`"approval"` / `"auto"` / `"bypass"`), `panelApprovalRequired`, and `pendingCount`. Confirm `projectName` is the project you are editing — see "Which Editor answered?" under Boot Handshake below.
 2. **Branch on `currentMode`**: under `approval`, the first write call to any `FullAuto` skill returns `MODE_RESTRICTED` and you must run the grant protocol before it executes; under `auto`/`bypass`, writes execute directly (self-assess risk under `auto`). Full protocol and mode table: see "Operating Mode" → "Boot Handshake" below.
 3. Only then proceed to skill discovery (below) and calls.
 
@@ -17,11 +17,11 @@ Before the first skill call in a session:
 The schema is the canonical source for exact skill names, parameters, defaults, and returns — **but you rarely need the expensive layers**. Route by task shape (all layers are server-cached with ETag/304 and served off the main thread; send `Accept-Encoding: gzip` and the server returns a cached gzip body, which shrinks the large layers by roughly 10x on the wire):
 
 - **Intent is specific** ("create a cube", "set this SO field") → `GET /skills/recommend?intent=<words>&topN=10&includeSchema=true` (4–14 KB; a typical `topN=10&includeSchema=true` answer measures ≈11–12 KB) returns scored candidates **with parameter schemas** — often the only lookup you need. `topN` caps how many candidates come back (default `10`, clamped to `1`–`50`) and is the knob for the size: `topN=3` is the cheap version, and `wire=v2` roughly halves whatever `topN` you asked for. If you already know the skill name, skip lookups entirely and go straight to the dryRun gate below.
-- **Task touches one or two areas** → directory first: `GET /skills` (~19 KB ≈ 3.4K tokens — all 785 skill names grouped by module, names are self-describing `module_verb`) to lock the module(s), then `GET /skills/schema?category=<Category>` (~13–44 KB) for exact signatures. Typical session cost ≈ 10K tokens instead of 35K. The brief directory is what bare `GET /skills` returns; the full per-skill listing is `GET /skills?full=1`.
+- **Task touches one or two areas** → directory first: `GET /skills` (~19 KB ≈ 3.4K tokens — all 805 skill names grouped by module, names are self-describing `module_verb`) to lock the module(s), then `GET /skills/schema?category=<Category>` (~13–44 KB) for exact signatures. Typical session cost ≈ 10K tokens instead of 35K. The brief directory is what bare `GET /skills` returns; the full per-skill listing is `GET /skills?full=1`.
 - **Exploratory / cross-module / unsure what exists** → full awareness: `GET /skills?summary=1` (~143 KB ≈ 35K tokens — every skill's full description). The only layer with all descriptions at once; reach for it when the cheaper layers left you unsure, **not by default**.
 - **Full detail (rare)**: `GET /skills/schema` — full schema with exact parameter schemas (~`618 KB` ≈ 150K tokens, client-cached 300s + disk-cached under `~/.unity_skills/cache/` with ETag/304 revalidation, so short-lived CLI processes reuse it too). Only when you need many modules' exact signatures at once.
 
-Python helper shortcuts — **these are `unity_skills.py` functions, not skill names. Never send one to `POST /skill/<name>`**; a helper name is not in the skill registry, so it can only ever come back as `SKILL_NOT_FOUND`. `unity_skills.search_skills("keyword")` greps the cached summary **locally** and returns only matching entries — the 143 KB stays on disk, out of your context. `unity_skills.get_skills_summary()` / `unity_skills.get_skill_schema()` wrap the layers above with memory+disk caching.
+Python helper shortcuts — **these are `unity_skills.py` functions, not skill names. Never send one to `POST /skill/<name>`**; a helper name is not in the skill registry, so it can only ever come back as `SKILL_NOT_FOUND`. `unity_skills.search_skills("keyword")` greps the cached summary **locally** and returns only matching entries — the 143 KB stays on disk, out of your context. `unity_skills.get_skills_summary()` / `unity_skills.get_skill_schema()` wrap the layers above with memory+disk caching. `unity_skills.find_skills(intent, top_n=10, include_schema=True, wire=None)` wraps `GET /skills/recommend` (add `wire="v2"` for the slimmer envelope). `unity_skills.get_meta(force_refresh=False)` wraps `GET /skills/meta`, cached on the client for the session since it is effectively constant. `unity_skills.execute_batch(steps, dry_run=False, continue_on_error=None, diff=False, mode=None)` wraps `POST /skills/batch` — e.g. `execute_batch([{"skill":"scene_get_info","args":{}}], dry_run=True)`.
 
 **Before executing a skill — the dryRun gate (do not skip).** The lite/summary manifest is for *awareness* (picking the right skill), not for calling. Descriptions are informal (human-written, not a formal signature; some omit parameter hints) and parameter schemas are omitted. Before the first execution of any skill whose exact parameters you don't already hold in context, **dryRun it**: `POST /skill/<name>?mode=dryRun` with your best-guess args. The server validates parameters and, on error, returns `unknownParams` with `suggestions` (the correct parameter names) plus the full `parameters` schema — iterate until `valid: true`, then execute without `?mode=dryRun`. This is the mechanism that turns "awareness" into "correct operation steps"; never guess parameters from descriptions and never skip dryRun for a skill you have not yet called successfully this session. Mode values are strictly validated (v2.1.0+): a mistyped `?mode=` / `?dryRun=` value (e.g. `mode=dry_run`, `dryRun=1`) is rejected with `INVALID_MODE` and the request is **not** executed — a typo can never silently fall through to a real execution.
 
@@ -29,14 +29,14 @@ Python helper shortcuts — **these are `unity_skills.py` functions, not skill n
 
 **Multi-skill tasks — aggregate-plan first.** When a task needs several skills in sequence, call `workflow_plan` (`POST` a JSON array of `{name, params}` steps) before executing any of them. It returns combined `steps`, `dependencies`, `totalRisk`, and `warnings`, so you sequence correctly and surface cross-step blockers before the first mutation. Then dryRun + execute each step in order.
 
-**Multi-skill execution — `POST /skills/batch` (v2.1.0+).** Execute a sequence in **one** HTTP call instead of N: body `{"steps":[{"skill":"<name>","args":{...}}, ...], "continueOnError":false}` (≤50 steps). Each step runs the full single-skill pipeline (validation, permission gate, undo, audit). Default is fail-fast — on a step error the rest are returned as `skipped`; `continueOnError: true` skips failed steps instead. Authorization responses (`MODE_RESTRICTED` / `CONFIRMATION_REQUIRED`) always interrupt regardless and carry the grant token in that step's error. Response: `{status, executed, failed, results:[{index, skill, status, result|error}]}`. `?mode=dryRun` validates every step in one shot without executing (never interrupts) — the batch counterpart of the dryRun gate.
+**Multi-skill execution — `POST /skills/batch` (v2.1.0+).** Execute a sequence in **one** HTTP call instead of N: body `{"steps":[{"skill":"<name>","args":{...}}, ...], "continueOnError":false}` (≤50 steps). Each step runs the full single-skill pipeline (validation, permission gate, undo, audit). Default is fail-fast — on a step error the rest are returned as `skipped`; `continueOnError: true` skips failed steps instead. Authorization responses (`MODE_RESTRICTED` / `CONFIRMATION_REQUIRED`) always interrupt regardless and carry the grant token in that step's error. Response: `{status, executed, failed, results:[{index, skill, status, result|error}]}`. `?mode=dryRun` validates every step in one shot without executing (never interrupts) — the batch counterpart of the dryRun gate. Python: `unity_skills.execute_batch(steps, dry_run=True)` / `execute_batch(steps, mode="transactional", diff=True)`.
 
 - **Inter-step references (`$ref`)** — a later step can now consume an earlier step's output. Anywhere in `args`, at any depth, an object whose **only** key is `$ref` — `{"$ref":"$N.path"}` — is replaced by `SelectToken(path)` on step `N`'s (0-based) unwrapped result: e.g. `{"instanceId":{"$ref":"$0.instanceId"}}` feeds the `instanceId` created by step 0 into a later step. A ref that fails to resolve fails that step with `SEMANTIC_INVALID`. Under `?mode=dryRun` refs are structurally validated (reported in `refsValidated` with `structural:true`) since the target value does not exist yet — treat any semantic mismatch there as a warning, not a hard failure. This lifts the old "later step cannot reference an earlier step's output" boundary; step-by-step calls are no longer required just to thread returned ids.
 - **Transactional mode (`?mode=transactional`)** — all-or-nothing. If any step fails (including an authorization interrupt), every already-executed step is rolled back via Unity Undo and the response returns top-level `status:"rolled_back"`, `rolledBack:true`, with executed steps marked `rolled_back`. Pre-check **rejects (`400`)** a batch that combines `continueOnError` with any step that `MayTriggerReload`. Steps that mutate assets are flagged `rollbackReliability:"partial"` — Undo cannot fully revert on-disk asset writes.
 
 Use module `SKILL.md` files for routing guidance, guardrails, and minimal examples, not as the canonical source of exact signatures.
 
-Current snapshot: `785` REST skills, `55` `*Skills.cs` source files grouped into `53` `SkillCategory` categories (the two differ by design: `BatchSkills.cs` holds no category of its own and registers into Workflow and Validation, `DiagnoseSkills.cs` folds into Debug), `80` module documentation directories (`53` REST/module docs + `27` advisory docs), Unity `2022.3+`, default timeout `15 minutes`.
+Current snapshot: `805` REST skills, `56` `*Skills.cs` source files grouped into `54` `SkillCategory` categories (the two differ by design: `BatchSkills.cs` holds no category of its own and registers into Workflow and Validation, `DiagnoseSkills.cs` folds into Debug), `82` module documentation directories (`54` REST/module docs + `28` advisory docs), Unity `2022.3+`, default timeout `15 minutes`.
 
 Python helper: `unity-skills/scripts/unity_skills.py`
 
@@ -59,6 +59,14 @@ On session start (or before the first skill call), call `GET /health` and read:
 - `pendingCount` — outstanding grant requests
 - `mainThreadIdleMs` — milliseconds since Unity's main thread last ran the request loop. `/health` is answered off the main thread, so a fast reply with a **large** `mainThreadIdleMs` means *"the server is alive but Unity is busy"* (a long skill, an import, or a modal dialog) — not *"the server is down"*. Single/double digits is a healthy idle editor; seconds means keep waiting rather than restart. `-1` means the loop has not ticked yet. Add `?live=1` to force the request through the main-thread queue when you need strictly live values instead of a snapshot up to ~1s old.
 - `workflowRecoveryMode` — `true` when workflow history failed to load this session: rollback data is degraded and file-store cleanup is suspended until the history is cleared.
+
+#### Which Editor answered? (multi-instance)
+
+Several Unity projects can run UnitySkills at once; each server takes the first free port in `8090`–`8100` in **launch order**, so a port number is not a project identity. Before the first skill call, read `projectName` / `instanceId` from `/health` and confirm they name the project the user is working on. Every response also carries `X-Unity-Instance` and `X-Unity-Project` headers, so a bare `curl` can check the same thing without a separate `/health` call.
+
+- **Python client** — auto-discovery prefers the registry entry whose `path` contains the current working directory, then other live entries by freshest heartbeat, then a port scan. It only silently falls back to *another* project when the cwd is not inside any registered project. `python unity_skills.py --list-instances` prints every live entry (`name`, `path`, `port`, `unityVersion`); pin the choice with `--port <n>` (or `--version "6"` / `"2022"`) whenever more than one instance is live or the cwd is outside the project.
+- **Bare HTTP** — read `~/.unity_skills/registry.json` (or call `/health` on each port) to pick the port; never assume `8090`. Re-check after the Editor restarts: the port can change.
+- **Mismatch** — stop, tell the user which project answered, and switch the port. Do not "fix" the wrong project.
 
 ### Three Modes (aligned with Claude Code permission modes)
 
@@ -128,7 +136,7 @@ Mode authorization (persistent, per-skill) and `ConfirmationToken` (single-shot,
 
 ### Skill Mode Annotation
 
-The REST surface (`785` skills) is partitioned by `[UnitySkill]` `Mode` and runtime metadata. Use schema endpoints for the canonical list:
+The REST surface (`805` skills) is partitioned by `[UnitySkill]` `Mode` and runtime metadata. Use schema endpoints for the canonical list:
 
 | Annotation | Count | Source |
 |---|---|---|
@@ -139,7 +147,7 @@ The REST surface (`785` skills) is partitioned by `[UnitySkill]` `Mode` and runt
 SemiAuto (read/query/analyze) skills are directly callable in every mode and span the modules below; use `GET /skills/schema?category=<Category>` for the exact list (write skills in the same modules stay FullAuto):
 
 - **script** (`script_read` / `script_list` / `script_get_info` / `script_find_in_file` / `script_get_compile_feedback`) · **perception** (`scene_analyze` / `scene_context` / `scene_health_check` / `scene_find_hotspots` / `project_stack_detect` — the module is named perception but its skills carry the `scene_*` prefix) · **scene** (`scene_get_info` / `scene_get_hierarchy` / `scene_get_loaded` / `scene_find_objects`) · **editor** (`editor_get_context` / `editor_get_state` / `editor_get_selection` / `editor_get_tags` / `editor_get_layers`) · **asset** (`asset_find` / `asset_get_info`) · **workflow** (`workflow_list` / `workflow_session_*` / `workflow_plan` — prefer workflow & batch helpers for planning/preview/jobs/rollback) · **debug + console** (`debug_check_compilation` / `debug_get_errors` / `debug_get_system_info` / `debug_get_memory_info` / `debug_get_logs` / `console_get_logs`)
-- plus most modules' own info / list / get / find skills. **Advisory**: `27` documentation-only modules (no REST skills) — see Coding Reference Index below.
+- plus most modules' own info / list / get / find skills. **Advisory**: `28` documentation-only modules (no REST skills) — see Coding Reference Index below.
 
 ## Compilation Feedback, Events & Telemetry
 
@@ -189,7 +197,7 @@ Every error response carries a top-level `errorCode` (plus `retryStrategy` / `re
 
 ## Coding Reference Index
 
-Before writing or refactoring Unity code, **load the relevant advisory module first**. These are the `27` `Documentation only` design modules (no REST skills — loadable under any mode) that pin rules to engine source and prevent hallucinated / removed APIs. Load on demand by topic, not all at once.
+Before writing or refactoring Unity code, **load the relevant advisory module first**. These are the `28` `Documentation only` design modules (no REST skills — loadable under any mode) that pin rules to engine source and prevent hallucinated / removed APIs. Load on demand by topic, not all at once.
 
 **General coding & architecture** — before writing gameplay code or making structural decisions:
 
@@ -216,6 +224,7 @@ Before writing or refactoring Unity code, **load the relevant advisory module fi
 | `addressables-design` | `InitializeAsync` / `LoadAssetAsync` / `LoadSceneAsync` / `UpdateCatalogs` / `AssetReference` |
 | `dotween-design` | `DOTween.Init` / `DOMove` / `Sequence` / `SetLoops` / `SetLink` / `ToUniTask` |
 | `primetween-design` | `Tween.Position` / `Sequence.Chain` / handle lifecycle / `PrimeTweenConfig` |
+| `qframework-design` | QFramework v1.0.257 — `Architecture<T>` / `RegisterSystem`-`RegisterModel`-`RegisterUtility` (now return the instance) / `ICommand`-`IQuery<T>` layering rules / `BindableProperty` / `TypeEventSystem` / CodeGenKit + UIKit + ResKit workflows |
 | `netcode-design` | `NetworkBehaviour` / RPC / `NetworkVariable` / Spawn |
 | `pico-design` | PICO Unity Integration SDK v3.4.0 — `PXR_Manager` / `PXR_Input` / MR (seethrough, anchors, mesh) / SecureMR / `Pico.Platform` services / 2.x-3.4 version diffs & deprecated-API blacklist |
 | `shadergraph-design` | Graph structure, node chains, SubGraph boundaries, keyword / blackboard layout |

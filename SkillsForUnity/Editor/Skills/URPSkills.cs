@@ -10,7 +10,7 @@ using UnityEngine.Rendering.Universal;
 namespace UnitySkills
 {
     /// <summary>
-    /// URP 专属的资产与 Renderer Feature 技能。
+    /// URP-specific asset and Renderer Feature skills.
     /// </summary>
     public static class URPSkills
     {
@@ -26,7 +26,9 @@ namespace UnitySkills
         [UnitySkill("urp_set_asset_settings", "Modify key settings on a URP asset",
             Category = SkillCategory.URP, Operation = SkillOperation.Modify,
             Tags = new[] { "urp", "asset", "settings", "modify" },
-            Outputs = new[] { "asset" })]
+            Outputs = new[] { "asset" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object URPSetAssetSettings(string assetPath = null, bool? supportsHDR = null, int? msaaSampleCount = null,
             float? renderScale = null, bool? supportsMainLightShadows = null, bool? supportsAdditionalLightShadows = null,
             bool? supportsCameraDepthTexture = null, bool? supportsCameraOpaqueTexture = null, float? shadowDistance = null) => RenderPipelineSkillsCommon.NoURP();
@@ -50,20 +52,26 @@ namespace UnitySkills
         [UnitySkill("urp_add_renderer_feature", "Add a safe built-in renderer feature to a URP renderer",
             Category = SkillCategory.URP, Operation = SkillOperation.Create,
             Tags = new[] { "urp", "renderer feature", "add" },
-            Outputs = new[] { "feature", "renderer" })]
+            Outputs = new[] { "feature", "renderer" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object URPAddRendererFeature(string featureType, string assetPath = null, int rendererIndex = -1, string rendererDataPath = null, string featureName = null, bool active = true) => RenderPipelineSkillsCommon.NoURP();
 
         [UnitySkill("urp_remove_renderer_feature", "Remove a renderer feature from a URP renderer",
             Category = SkillCategory.URP, Operation = SkillOperation.Delete,
             Tags = new[] { "urp", "renderer feature", "remove" },
             Outputs = new[] { "removedFeature", "renderer" },
-            RiskLevel = "medium")]
+            RiskLevel = "medium",
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object URPRemoveRendererFeature(string assetPath = null, int rendererIndex = -1, string rendererDataPath = null, int featureIndex = -1, string featureName = null, string featureType = null) => RenderPipelineSkillsCommon.NoURP();
 
         [UnitySkill("urp_set_renderer_feature_active", "Enable or disable a renderer feature on a URP renderer",
             Category = SkillCategory.URP, Operation = SkillOperation.Modify,
             Tags = new[] { "urp", "renderer feature", "active" },
-            Outputs = new[] { "feature", "active" })]
+            Outputs = new[] { "feature", "active" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object URPSetRendererFeatureActive(bool active, string assetPath = null, int rendererIndex = -1, string rendererDataPath = null, int featureIndex = -1, string featureName = null, string featureType = null) => RenderPipelineSkillsCommon.NoURP();
 #else
         [UnitySkill("urp_get_info", "Get information about the active URP asset and renderer setup",
@@ -110,12 +118,15 @@ namespace UnitySkills
             var asset = LoadAssetOrError(assetPath, out var error);
             if (error != null) return error;
 
-            // 所有数值都在动 SerializedObject 之前校验。下面三个属性虽有会 clamp/拒绝的公共 C# setter
-            // （UniversalRenderPipelineAsset.msaaSampleCount 直接转成 MsaaQuality 枚举、完全不做范围检查；
-            // .renderScale 与 .shadowDistance 分别 clamp 到 [minRenderScale, maxRenderScale] 与 [0, +inf)），
-            // 但本技能是通过 SerializedObject 直写背后的序列化字段（m_MSAA/m_RenderScale/m_ShadowDistance），
-            // 绕过了全部 setter：msaaSampleCount=3 会被原样接受并回显（URP 只支持 1/2/4/8 采样），
-            // 负的 renderScale 或 shadowDistance 同样会被原样写入。
+            // All values are validated before touching the SerializedObject. The three properties
+            // below do have public C# setters that clamp/reject
+            // (UniversalRenderPipelineAsset.msaaSampleCount just casts straight to the
+            // MsaaQuality enum with no range check at all; .renderScale and .shadowDistance clamp
+            // to [minRenderScale, maxRenderScale] and [0, +inf) respectively), but this skill
+            // writes the underlying serialized fields directly through SerializedObject
+            // (m_MSAA/m_RenderScale/m_ShadowDistance), bypassing every setter: msaaSampleCount=3
+            // would be accepted and echoed back as-is (URP only supports 1/2/4/8 samples), and a
+            // negative renderScale or shadowDistance would likewise be written as-is.
             if (msaaSampleCount.HasValue)
             {
                 var msaa = msaaSampleCount.Value;

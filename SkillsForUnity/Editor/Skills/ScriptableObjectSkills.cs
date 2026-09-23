@@ -8,7 +8,7 @@ using System.Globalization;
 namespace UnitySkills
 {
     /// <summary>
-    /// ScriptableObject 管理技能。
+    /// ScriptableObject management skills.
     /// </summary>
     public static class ScriptableObjectSkills
     {
@@ -16,7 +16,8 @@ namespace UnitySkills
             Category = SkillCategory.ScriptableObject, Operation = SkillOperation.Create,
             Tags = new[] { "scriptableobject", "create", "asset", "data" },
             Outputs = new[] { "type", "path" },
-            TracksWorkflow = true)]
+            RequiresInput = new[] { "typeName", "savePath" },
+            TracksWorkflow = true, MutatesAssets = true)]
         public static object ScriptableObjectCreate(string typeName, string savePath)
         {
             if (Validate.SafePath(savePath, "savePath") is object pathErr) return pathErr;
@@ -81,7 +82,7 @@ namespace UnitySkills
             Tags = new[] { "scriptableobject", "set", "field", "property" },
             Outputs = new[] { "field", "value" },
             RequiresInput = new[] { "assetPath" },
-            TracksWorkflow = true)]
+            TracksWorkflow = true, MutatesAssets = true)]
         public static object ScriptableObjectSet(string assetPath, string fieldName, string value)
         {
             var asset = AssetDatabase.LoadAssetAtPath<ScriptableObject>(assetPath);
@@ -144,7 +145,7 @@ namespace UnitySkills
             Category = SkillCategory.ScriptableObject, Operation = SkillOperation.Create,
             Tags = new[] { "scriptableobject", "duplicate", "copy", "clone" },
             Outputs = new[] { "original", "copy" },
-            RequiresInput = new[] { "assetPath" })]
+            RequiresInput = new[] { "assetPath" }, MutatesAssets = true)]
         public static object ScriptableObjectDuplicate(string assetPath)
         {
             if (Validate.SafePath(assetPath, "assetPath") is object pathErr) return pathErr;
@@ -168,7 +169,7 @@ namespace UnitySkills
             Tags = new[] { "scriptableobject", "set", "batch", "fields" },
             Outputs = new[] { "fieldsSet", "failed", "results" },
             RequiresInput = new[] { "assetPath" },
-            TracksWorkflow = true)]
+            TracksWorkflow = true, MutatesAssets = true)]
         public static object ScriptableObjectSetBatch(string assetPath, string fields)
         {
             var asset = AssetDatabase.LoadAssetAtPath<ScriptableObject>(assetPath);
@@ -182,9 +183,10 @@ namespace UnitySkills
             var failedKeys = new System.Collections.Generic.List<string>();
             foreach (var kv in dict)
             {
-                // 与 scriptableobject_set 一样采用"先字段后属性"的回退：只查字段会静默跳过所有
-                // 公开属性目标（如 Tile.colliderType / Tile.color，它们在 Unity 内置类型上是
-                // 自动属性），该键的 fieldsSet 原封不动，且不提示跳过了哪个键、为什么跳过。
+                // Same "fields first, then properties" fallback as scriptableobject_set: looking at
+                // fields only would silently skip every public-property target (e.g. Tile.colliderType /
+                // Tile.color, which are auto-properties on Unity's built-in types), leaving fieldsSet
+                // untouched for that key with no indication of which key was skipped or why.
                 var field = type.GetField(kv.Key, BindingFlags.Public | BindingFlags.Instance);
                 if (field != null)
                 {
@@ -229,6 +231,7 @@ namespace UnitySkills
             Category = SkillCategory.ScriptableObject, Operation = SkillOperation.Query,
             Tags = new[] { "scriptableobject", "find", "search", "asset" },
             Outputs = new[] { "count", "assets" },
+            RequiresInput = new[] { "typeName" },
             ReadOnly = true,
             Mode = SkillMode.SemiAuto)]
         public static object ScriptableObjectFind(string typeName, string searchPath = "Assets", int limit = 50)
@@ -247,8 +250,8 @@ namespace UnitySkills
             Tags = new[] { "scriptableobject", "export", "json", "serialize" },
             Outputs = new[] { "json", "path" },
             RequiresInput = new[] { "assetPath" },
-            // 与 scene_dependency_analyze 同一形态：带 savePath 时本 skill 会执行 File.WriteAllText，
-            // 若标 ReadOnly=true 就会绕过 surface profile 与 diff 捕获。
+            // Same shape as scene_dependency_analyze: when savePath is supplied this skill runs
+            // File.WriteAllText, so marking it ReadOnly=true would bypass the surface profile and diff capture.
             MutatesAssets = true,
             Mode = SkillMode.SemiAuto)]
         public static object ScriptableObjectExportJson(string assetPath, string savePath = null)
@@ -270,7 +273,7 @@ namespace UnitySkills
             Tags = new[] { "scriptableobject", "import", "json", "deserialize" },
             Outputs = new[] { "assetPath", "warning" },
             RequiresInput = new[] { "assetPath" },
-            TracksWorkflow = true)]
+            TracksWorkflow = true, MutatesAssets = true)]
         public static object ScriptableObjectImportJson(string assetPath, string json = null, string jsonFilePath = null)
         {
             var asset = AssetDatabase.LoadAssetAtPath<ScriptableObject>(assetPath);
@@ -283,8 +286,8 @@ namespace UnitySkills
             }
             if (string.IsNullOrEmpty(data)) return new { error = "No JSON data provided" };
 
-            // EditorJsonUtility.FromJsonOverwrite 会静默忽略裸字段 JSON，它期望的是
-            // scriptableobject_export_json 产出的 {"MonoBehaviour":{...}} 外壳，因此这里给裸对象补壳。
+            // EditorJsonUtility.FromJsonOverwrite silently ignores bare-field JSON; it expects the
+            // {"MonoBehaviour":{...}} wrapper produced by scriptableobject_export_json, so we wrap bare objects here.
             try
             {
                 var root = Newtonsoft.Json.Linq.JToken.Parse(data);

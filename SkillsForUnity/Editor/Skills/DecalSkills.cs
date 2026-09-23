@@ -10,7 +10,7 @@ using UnityEngine.Rendering.Universal;
 namespace UnitySkills
 {
     /// <summary>
-    /// URP 贴花投射器（Decal Projector）技能。
+    /// URP Decal Projector skills.
     /// </summary>
     public static class DecalSkills
     {
@@ -18,15 +18,17 @@ namespace UnitySkills
         [UnitySkill("decal_create", "Create a URP Decal Projector",
             Category = SkillCategory.Decal, Operation = SkillOperation.Create,
             Tags = new[] { "decal", "projector", "create", "urp" },
-            Outputs = new[] { "name", "instanceId" })]
+            Outputs = new[] { "name", "instanceId" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesScene = true)]
         public static object DecalCreate(string name = "Decal Projector", string materialPath = null, float x = 0, float y = 0, float z = 0) => RenderPipelineSkillsCommon.NoURP();
 
         [UnitySkill("decal_get_info", "Get information about a Decal Projector",
             Category = SkillCategory.Decal, Operation = SkillOperation.Query,
             Tags = new[] { "decal", "projector", "info" },
             Outputs = new[] { "name", "material", "size" },
-            // 必须与下面装了 URP 时的声明逐字一致：两个变体是同一个端点，
-            // 只有其中一个会参与编译。
+            // Must stay byte-for-byte identical to the declaration in the URP-installed branch
+            // below: the two variants are the same endpoint, and only one of them compiles in.
             RequiresInput = new[] { "gameObject" },
             ReadOnly = true,
             Mode = SkillMode.SemiAuto)]
@@ -35,9 +37,11 @@ namespace UnitySkills
         [UnitySkill("decal_set_properties", "Modify Decal Projector properties",
             Category = SkillCategory.Decal, Operation = SkillOperation.Modify,
             Tags = new[] { "decal", "projector", "modify" },
-            Outputs = new[] { "name", "material", "size" })]
-        // 参数表必须与 URP 分支的真实现逐字一致：文档一致性测试在无 URP 的 CI 工程里
-        // 只能看到这个 stub，参数少一个就会把文档判成"多出参数"。
+            Outputs = new[] { "name", "material", "size" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesScene = true)]
+        // The parameter list must stay byte-for-byte identical to the real URP-branch implementation:
+        // in a no-URP CI project, the doc-consistency test can only see this stub, and one missing parameter would get the docs flagged as "has extra parameters".
         public static object DecalSetProperties(
             string name = null,
             int instanceId = 0,
@@ -67,19 +71,25 @@ namespace UnitySkills
             Category = SkillCategory.Decal, Operation = SkillOperation.Delete,
             Tags = new[] { "decal", "projector", "delete" },
             Outputs = new[] { "deleted" },
-            RiskLevel = "medium")]
+            RiskLevel = "medium",
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesScene = true)]
         public static object DecalDelete(string name = null, int instanceId = 0, string path = null) => RenderPipelineSkillsCommon.NoURP();
 
         [UnitySkill("decal_set_properties_batch", "Modify multiple Decal Projectors in one request. items: JSON array of {name, instanceId, path, materialPath, drawDistance, fadeScale, fadeFactor, startAngleFade, endAngleFade, uvScale, uvBias, size, pivot, renderingLayerMask, scaleMode}",
             Category = SkillCategory.Decal, Operation = SkillOperation.Modify,
             Tags = new[] { "decal", "projector", "batch" },
-            Outputs = new[] { "successCount", "failCount", "results" })]
+            Outputs = new[] { "successCount", "failCount", "results" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesScene = true)]
         public static object DecalSetPropertiesBatch(string items) => RenderPipelineSkillsCommon.NoURP();
 
         [UnitySkill("decal_ensure_renderer_feature", "Ensure the current URP renderer has a DecalRendererFeature",
             Category = SkillCategory.Decal, Operation = SkillOperation.Create | SkillOperation.Query,
             Tags = new[] { "decal", "renderer feature", "urp" },
-            Outputs = new[] { "renderer", "feature" })]
+            Outputs = new[] { "renderer", "feature" },
+            // Mirrors the real (URP) branch so metadata stays identical when the package is absent.
+            MutatesAssets = true)]
         public static object DecalEnsureRendererFeature(string assetPath = null, int rendererIndex = -1, string rendererDataPath = null) => RenderPipelineSkillsCommon.NoURP();
 #else
         [UnitySkill("decal_create", "Create a URP Decal Projector",
@@ -114,9 +124,9 @@ namespace UnitySkills
             Category = SkillCategory.Decal, Operation = SkillOperation.Query,
             Tags = new[] { "decal", "projector", "info" },
             Outputs = new[] { "name", "material", "size" },
-            // 三个定位参数单看都是可选的，不声明这个组 token 的话，空请求体会一路执行到
-            // GameObjectFinder 报 "not found"——为一个调用方压根没指定的目标报查找失败。
-            // 有了组 token 才能在入口就说清"你没有指定对象"。
+            // Each of the three locator parameters looks optional on its own; without declaring this group
+            // token, an empty request body would run all the way to GameObjectFinder reporting "not found" -- a lookup failure for a target the caller never specified in the first place.
+            // The group token lets the entry point say clearly up front "you didn't specify a target."
             RequiresInput = new[] { "gameObject" },
             ReadOnly = true,
             RequiresPackages = new[] { "com.unity.render-pipelines.universal" },

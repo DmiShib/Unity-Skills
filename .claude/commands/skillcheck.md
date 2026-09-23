@@ -10,7 +10,7 @@
 2. **完全无文档的 Skill**：C# 中存在 `[UnitySkill]` 但在整个 `skills/` 文档树中**完全无提及**的 Skill（注意：本项目为 schema-first 设计——skill 无需逐个写 `### skill_name` 定义，故"无 `###` 定义"本身**不算缺陷**，详见步骤 3a）
 3. **参数不一致**：SKILL.md 文档的参数表与 C# 方法签名不匹配（多余参数、缺失参数、类型不匹配）
 4. **元数据缺失**：`[UnitySkill]` 特性中缺少 `Category`、`Operation`、`Tags`、`Outputs` 等关键元数据
-5. **数量失同步**：文档（agent.md / README / README_CN / SKILL.md）中声称的技能总数与模块计数表和实际代码不一致
+5. **数量失同步**：文档（AGENTS.md / README / README_CN / SKILL.md）中声称的技能总数与模块计数表和实际代码不一致
 
 ## 步骤 1：收集 C# Skill 定义
 
@@ -174,9 +174,13 @@
 3. **YAML frontmatter 结构合法**：文件以 `---` 开头并正确闭合；`name` 与 `description` 两个必填键存在且非空 → 缺失 / 不闭合 → 🔴 严重。
 4. **无 UTF-8 BOM**：文件开头不得有 `EF BB BF` 字节（`SkillInstaller.cs` 明确：BOM 会让部分 agent 拒析 frontmatter）→ 有 BOM → 🟡 中等。
 5. **（信息项 🟢）discovery 总量**：累加所有 `SKILL.md` 的 `description` 字符数，提示总和是否逼近发现器 ~8000 字符软预算（超出时发现器可能截断或省略部分 skill）。
-6. **根 SKILL.md 字节硬红线**：`unity-skills~/SKILL.md` 全文件 ≤ **8,192 字节**（`wc -c` 口径，用户拍板的硬红线；v2.6.0 瘦身后长期在 8,1xx 徘徊）→ 超限 🔴 严重。报告中始终给出当前字节数与剩余余量；新增内容一律下沉 `references/` 或模块文档，不进根文件。
+6. **根 SKILL.md 字节硬红线**：`unity-skills~/SKILL.md` ≤ **8,192 字节**（用户拍板的硬红线；v2.6.0 瘦身后长期在 8,1xx 徘徊）→ 超限 🔴 严重。**口径 = LF 归一化后的 UTF-8 字节数**，与 `RootSkillDoc_ShouldStayWithinByteBudget` 测试一致：`tr -d '\r' < SKILL.md | wc -c`，不要直接 `wc -c`——Windows 检出（`core.autocrlf=true`）会把 92 个换行写成 CRLF，同一份文档裸 `wc -c` 多出 92 字节（issue #59：8185 → 8277 假红）。报告中始终给出当前字节数与剩余余量；新增内容一律下沉 `references/` 或模块文档，不进根文件。
+7. **行尾锁定（issue #59 回归闸）**：
+   - 仓库根 `.gitattributes` 必须存在且含 `*.md text eol=lf`（缺失 → 🔴 严重：Windows UPM git 安装会在 `PackageCache` 检出 CRLF，用户无法自行修复）
+   - `unity-skills~/**/*.md` 内不得含 `\r`（`rg -l $'\r' unity-skills~` 应为空；命中 → 🟡 中等，说明有文件以 CRLF 提交，`git add --renormalize .` 后重新提交）
+   - 任何按字节/哈希度量文件的测试或脚本，必须先做 `\r\n`→`\n` 归一化再计数（新增此类校验时同样适用）
 
-> 正常预期：0 项超限、0 BOM。本项是防止"超 1024 拒载" bug 复发的核心闸门。
+> 正常预期：0 项超限、0 BOM、0 CRLF、`.gitattributes` 在位。本项是防止"超 1024 拒载"与"CRLF 假红"两类 bug 复发的核心闸门。
 
 ## 步骤 4：技能数量统计与文档同步（原 /skillcount，唯一允许写文件的步骤）
 
@@ -193,7 +197,7 @@
 
 | 文件 | 搜索内容 |
 |------|---------|
-| `agent.md` | 总数引用（如 "785 个 REST Skills"）、模块计数表 |
+| `AGENTS.md` | 架构行的 `56 *Skills.cs / 54 SkillCategory / 805 skills`（无模块计数表） |
 | `README.md` | badge 数字、正文中的总数 |
 | `README_CN.md` | 同上中文版 |
 | `SkillsForUnity/unity-skills~/SKILL.md` | 总数引用 |
@@ -207,8 +211,7 @@
 如果实际总数与文档不一致：
 
 1. **替换总数**：将文档中所有旧总数替换为实际统计总数
-2. **更新模块计数表**：更新 `agent.md` 中 `## Skills 模块` 表格的每个模块数量（SkillCategory 口径）
-3. **更新 README 模块表**：同步 `README.md` 和 `README_CN.md` 中的分类概要表
+2. **更新模块计数表**：同步 `README.md` 和 `README_CN.md` 中的分类概要表（SkillCategory 口径；`AGENTS.md` 不再维护该表）
 
 替换时注意上下文匹配，避免误替换（如版本号中的数字）。修正后用 `rg -n "{旧数字}"` 验证旧数字不再出现（非技能计数上下文除外）。
 
@@ -231,6 +234,8 @@
 - NeverInSemi 自动判定：{N}（纯元数据规则，无兜底名单）
 - /permission API 校验：{已通过 / 已跳过：服务离线 / N 项失败}
 - Frontmatter 合规：{通过（0 超限）/ N 项超限}（最长 description：{module} {len} 字符；discovery 总量：{sum} / ~8000 软预算）
+- 根 SKILL.md 预算：{N} / 8192 字节（LF 归一化口径，余量 {8192-N}）
+- 行尾锁定：{✅ .gitattributes 在位、0 个 CRLF 文档 / 🔴 .gitattributes 缺失 / 🟡 N 个 CRLF 文件}
 
 📊 数量同步（原 /skillcount）
 - 实际总数：{N}（SkillCategory 口径 {K} 个分类）
@@ -267,6 +272,9 @@
   - {module}/SKILL.md: `name` 长度 {len} 字符 > 64
   - {module}/SKILL.md: frontmatter 缺少必填键 `{name/description}` 或 `---` 未闭合
 
+  行尾锁定缺失：
+  - 仓库根 `.gitattributes` 不存在或未含 `*.md text eol=lf` — Windows 检出会让根 SKILL.md 字节预算测试假红（issue #59）
+
 🟡 中等问题（功能可用但文档不完整）
 
   完全无文档的 Skill（代码有，整个 skills/ 树无任何提及）：
@@ -294,6 +302,7 @@
 
   Frontmatter 编码问题：
   - {module}/SKILL.md: 文件含 UTF-8 BOM（EF BB BF）— 部分 agent 会拒析 frontmatter，应存为 UTF-8 无 BOM
+  - {path}: 文档含 CRLF 行尾 — 以 CRLF 提交，`git add --renormalize .` 后重新提交
 
 🟢 建议（可改进项）
 
@@ -313,7 +322,7 @@
 
 ## 注意事项
 
-- **审计部分（步骤 1–3）是只读的**；唯一允许修改文件的是步骤 4 的数量同步（且仅限 agent.md / README.md / README_CN.md / unity-skills~/SKILL.md 四个文件中的数量引用），不修改 C# 代码，不自动 `git commit`，只提示用户审阅后提交
+- **审计部分（步骤 1–3）是只读的**；唯一允许修改文件的是步骤 4 的数量同步（且仅限 AGENTS.md / README.md / README_CN.md / unity-skills~/SKILL.md 四个文件中的数量引用），不修改 C# 代码，不自动 `git commit`，只提示用户审阅后提交
 - 如果审计通过且数量一致，输出 `✅ 所有 Skill 定义与文档一致，数量已同步（{N} Skills），无问题发现`
 - 对于 batch 类 Skill（如 `gameobject_create_batch`），参数通常是 `string items`（JSON 数组），文档中以 `items` + Item properties 形式描述，这种情况视为一致。**真正的参数比对**应在 `BatchXxxItem` 类属性与文档 Item properties 之间进行
 - `*_batch` 的 Item properties 与对应单个 Skill 的参数应保持一致，可作为额外检查项。但 batch 版本可能比单个版本多出属性（如 `gameobject_create_batch` 的 BatchItem 有 `rotX/scaleX` 而单个 `gameobject_create` 没有），这种"batch 扩展"标注但不算错误

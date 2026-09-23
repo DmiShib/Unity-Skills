@@ -9,7 +9,7 @@ using System.Text.RegularExpressions;
 namespace UnitySkills
 {
     /// <summary>
-    /// 脚本管理技能：创建、读取、修改。
+    /// Script management skills: create, read, modify.
     /// </summary>
     public static class ScriptSkills
     {
@@ -72,6 +72,7 @@ namespace UnitySkills
             Category = SkillCategory.Script, Operation = SkillOperation.Create,
             Tags = new[] { "script", "batch", "create", "bulk" },
             Outputs = new[] { "totalItems", "successCount", "failCount", "results" },
+            RequiresInput = new[] { "items" },
             MayTriggerReload = true, MutatesAssets = true,
             RiskLevel = "high")]
         public static object ScriptCreateBatch(string items)
@@ -150,8 +151,8 @@ namespace UnitySkills
             Category = SkillCategory.Script, Operation = SkillOperation.Query,
             Tags = new[] { "script", "search", "pattern", "grep" },
             Outputs = new[] { "pattern", "matchCount", "matches" },
-            // 该参数没有 CLR 默认值，但 IsParameterRequired 把"无默认值的引用类型参数"判为可选，
-            // 于是 schema 报 required:false，而 Validate.Required 对缺省和空串都会拒绝——两者需在此对齐。
+            // This parameter has no CLR default value, but IsParameterRequired treats a no-default
+            // reference-type parameter as optional, so schema reports required:false while Validate.Required rejects both missing and empty string -- the two must agree here.
             RequiresInput = new[] { "pattern" },
             ReadOnly = true,
             Mode = SkillMode.SemiAuto)]
@@ -315,7 +316,7 @@ namespace UnitySkills
             Tags = new[] { "script", "rename", "refactor", "file" },
             Outputs = new[] { "path", "oldPath", "newName", "jobId" },
             RequiresInput = new[] { "scriptPath" },
-            MayTriggerReload = true, RiskLevel = "high")]
+            MayTriggerReload = true, RiskLevel = "high", MutatesAssets = true)]
         public static object ScriptRename(string scriptPath, string newName, bool checkCompile = true, int diagnosticLimit = DefaultDiagnosticLimit)
         {
             if (Validate.SafePath(scriptPath, "scriptPath") is object pathErr) return pathErr;
@@ -342,7 +343,7 @@ namespace UnitySkills
             Tags = new[] { "script", "move", "reorganize", "file" },
             Outputs = new[] { "oldPath", "newPath", "jobId" },
             RequiresInput = new[] { "scriptPath", "newFolder" },
-            MayTriggerReload = true, RiskLevel = "high")]
+            MayTriggerReload = true, RiskLevel = "high", MutatesAssets = true)]
         public static object ScriptMove(string scriptPath, string newFolder, bool checkCompile = true, int diagnosticLimit = DefaultDiagnosticLimit)
         {
             if (Validate.SafePath(scriptPath, "scriptPath") is object pathErr) return pathErr;
@@ -351,10 +352,10 @@ namespace UnitySkills
 
             var fileName = Path.GetFileName(scriptPath);
             var newPath = Path.Combine(newFolder, fileName);
-            // 不能用 System.IO 建目录：它只动文件系统，AssetDatabase 在 Refresh 之前不知道该文件夹，
-            // MoveAsset 对未登记的父目录会失败（"Could not find parent directory GUID:0000..."），
-            // 还会留下没有 .meta 的孤儿目录。EnsureAssetFolderExists 改用 AssetDatabase.CreateFolder
-            // 逐级创建，创建即登记。
+            // Can't use System.IO to create the directory: that only touches the filesystem, and
+            // AssetDatabase won't know about the folder until Refresh runs, so MoveAsset fails on an
+            // unregistered parent directory ("Could not find parent directory GUID:0000...") and leaves
+            // an orphan directory with no .meta. EnsureAssetFolderExists uses AssetDatabase.CreateFolder to create level by level, registering as it goes.
             RenderPipelineSkillsCommon.EnsureAssetFolderExists(newPath);
             var asset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(scriptPath);
             if (asset != null) WorkflowManager.SnapshotObject(asset);

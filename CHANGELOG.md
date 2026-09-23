@@ -1,6 +1,161 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to **UnitySkills** will be documented in this file.
+
+## [2.8.4] - 2026-09-19
+
+> **面板拖窗卡顿收敛 + 设置抽屉开关修复 + Unity CLI 顾问文档对齐 beta.9 + 多实例连错防护** —— (1) 回应 #60 的 Windows 拖窗卡顿反馈：合并报告人的 PR #61——技能列表改为定高 `ListView` 虚拟化、拖窗期间轨道临时降级为减列切片，并把动画静默窗口与网格恢复解耦（根治 6000.x 双源重绘导致的轨道撕裂）；另把设置抽屉里两个错位的自绘开关换成标准 `Toggle`；(2) `unity-cli` 顾问文档从 `1.0.0-beta.5` 对齐到 `1.0.0-beta.9`，修正 beta6+ 下已经错误的"退出码 6 = 测试失败"表述，并把新出现的 `close` / `vcs` / `plugin` 等命令收进 DO NOT 清单。；(3) 多工程同开时的"连错编辑器"防护：每个 HTTP 响应带 `X-Unity-Instance` / `X-Unity-Project` 头，SKILL.md 首次握手要求核对 `projectName`，协议文档新增多实例选端口指引。
+
+### Added
+
+- **多实例身份标识：每个响应带 `X-Unity-Instance` / `X-Unity-Project` 头（`SkillsHttpServer`）** — 多个 Unity 工程同时开启 UnitySkills 时端口按启动先后占用（8090 起），端口号不等于工程身份；Python 客户端会按当前目录优先匹配 registry，但裸 `curl` 或记住的端口绕过 registry 后连错工程没有任何信号，技能响应体也不含工程名。现五条响应路径（即时 JSON、缓存 GET、`/health` 快路径、队列技能结果、`/events`）统一由 `AddInstanceHeaders` 附加两个头：值取自 `/health` 快照字段，HTTP 线程零 Unity API；产品名含非 ASCII 时对 `X-Unity-Project` 做百分号编码以满足头值约束。已在 6000.3.9f1 实机逐路径核对。
+- **多实例引导文档** — 根 `SKILL.md` 首次握手第 1 步新增"确认 `projectName` 是正在编辑的工程，不匹配就固定 `--port`"（为守住 8192 字节红线同步压缩了若干措辞，现 8187 字节）；`references/protocol-operating-mode.md` 与 `SKILL_FULL.md` 的 Boot Handshake 新增 "Which Editor answered? (multi-instance)" 小节，写明客户端自动发现顺序与静默回退条件（cwd 不在任何已注册工程内时才会落到其他工程）、`--list-instances` / `--port` / `--version` 用法、裸 HTTP 应读 `~/.unity_skills/registry.json` 而非假设 8090、不匹配时停下报告而不是操作错误工程。
+- **可选的 Agent 指令文件引导行（`AgentInstructionService`）** — 设置抽屉新增默认关闭的开关，开启后在安装 / 自动同步时向每个已安装 AI 工具的根指令文件追加一行"使用 Unity Skills"引导（Claude Code 的 `CLAUDE.md`，Codex / Antigravity / Cursor / OpenCode / Kimi Code 共用的 `AGENTS.md`，Antigravity 全局的 `GEMINI.md`）；开启立即应用到全部已安装工具，关闭则移除该行（文件无其他内容时整文件删除）。按整句精确匹配、不留标记注释，上下文 token 成本最小；预发布期的标记包裹写法仍可识别并自动迁移清理。新增 `AgentInstructionService`（358 行）与 280 行测试，三语文案齐备。
+
+### Fixed
+
+- **设置抽屉两个开关的白色滑块错位** — "接收版本更新提醒"与"记录执行数据"此前不是 `Toggle`，而是从顶栏照搬的自绘 `.server-switch` 容器（两层 `VisualElement` + `ClickEvent` 切换 `.on` 类），放进设置行后滑块跑到轨道右上角、溢出轨道边缘。现改为与"自动同步已安装的 AI 工具"、标签页显示等同类设置项一致的 `ui:Toggle`（`.setting-toggle`），控制器改用 `RegisterValueChangedCallback` 与 `SetValueWithoutNotify` 同步状态，行为不变；已在 6000.3.9f1 实机截图确认滑块居中。
+
+- **Token 等级「全量」档横向拖窗卡顿（#60）** — 合并报告人的 PR #61，两项改动：(a) 技能列表此前在 `ScrollView` 内为 Full / Maximum 档全部 805 个技能建实体行（折叠的行只是 `display: none`），现改为 24 px 定高 `ListView`（`FixedHeight` 虚拟化）只物化视口内的行，分类折叠状态仍记在 `EditorPrefs`，拖窗时不再让数百个文本行重新过布局，搜索输入也不再每次按键重建全部行；(b) 轨道在 `GeometryChangedEvent` 连发期间改用按宽度缩放的 4–24 列切片（6 行保持不变，拖窗中冻结波形观感完整）并暂停 60 fps 动画。报告人在受影响机器（Windows 11 / 2022.3.62f3c1）上确认改善；维护者在 macOS / Windows 均未复现报告的卡顿，本轮实机验证为"不引入回归 + 视觉可接受"。本版本早些时候曾尝试把 288 个 Painter2D 切片改成两次 `MeshGenerationContext.Allocate` 顶点色网格（提交 `aaff17a9`），实机发现 6000.3/Metal 拖窗时轨道撕裂歪斜；逐组对照实验证明撕裂与绘制技术无关——6000.x 的延迟网格生成管线在"60 fps 动画重绘 × 拖窗重绘"双源并发时会产出半新半旧帧（逐格 Painter2D 同样中招，2022 同步生成无此问题；手拖停顿 >120 ms 或光标掠过轨道触发悬停动画都会制造双源）。因此绘制整体回到逐格 Painter2D 路径（网格不再有存在必要），并把动画与拖窗彻底解耦根治双源：48×6 全清网格仍在最后一次几何变更 120 ms 后恢复（几何驱动重绘，单路安全），被拖窗暂停的动画不再自动恢复（留待下次悬停/点击从冻结处继续），且最后一次几何变更后 300 ms 的静默期内 `PointerEnter` 悬停触发被屏蔽；另曾尝试在 400/800 ms 各补一次自愈重绘，实验证明补绘反而会重新"复活"管线交错留下的僵尸帧（旧 painter2D 节点被延迟管线按原形状重放，60 fps 动画重绘也盖不掉），故不做补绘——拖窗中的瞬态残帧随下一次几何变化自清。感谢 [@Yuyuyuxmy](https://github.com/Yuyuyuxmy)（#61）。
+
+- **AI 工具自动同步不再让落后工程回写共享副本（`SkillInstallSyncService`）** — 全局作用域的副本（`~/.claude/skills/unity-skills` 等）被本机所有工程共享，此前版本门只看本工程 `Library/UnitySkills/install_sync.json` 的记录，仍在旧版本包上的工程一打开就会把另一工程已刷到新版本的副本覆盖回旧版本。现在安装时向 `scripts/agent_config.json` 写入 `version` 印记（旧副本回退解析 `scripts/unity_skills.py` 的 `__version__`），自动同步逐目标比较：副本 ≥ 本工程包版本即跳过（同版本免重拷、更新则不降级），仅副本更旧或版本不明时才刷新；副本更新而被跳过时 Console 打一行 Info 说明（三语跟随面板语言）。面板的 Update 按钮与自定义路径 Install 走同一规则：副本已是本版本或更新时弹提示并跳过（强制重装先卸载再安装），首次安装不受影响。新增 `SkillInstaller.CompareInstalledVersion` / `ReadInstalledVersion`、`ShouldRefreshTarget` 与 11 条用例，本地化新增 `dialog_info` / `agent_install_already_current` / `agent_install_newer_kept`（三语，字形已核图集）。
+
+### Changed
+
+- **Unity CLI 顾问文档对齐 `1.0.0-beta.9`（`skills/unity-cli/SKILL.md`、`references/protocol-unity-cli.md`）** — 校验基线由 beta.5 提升到 beta.9（beta.7 上线当日撤回、变更并入 beta.8）；§7 能力分支新增 beta6+ / beta8+ / beta9+ 三条，beta3–5 描述全部保留，语义变更处显式写双分支，旧二进制用户仍可对照使用；`--help` 仍是最终权威。新增 flag 与退出码均已用 beta.9 二进制的 `--help` 逐项核实；C# 侧 `UnityCliService` 只保存 `--version` 原文、不比较版本，无需改动。
+- **测试退出码拆分** — beta6+ `unity test` 失败用例退出 `8`（`TESTS_FAILED`），`6` 仅表示"未得出结论"（编译错误 / 许可证 / 崩溃 `TEST_RUN_ERROR`、超时 `TEST_TIMED_OUT`）；§6 退出码表新增 `8` 行并改写 `6` / `7`（覆盖 `doctor --ci` 6/7、`projects verify` 6/0、beta9+ `open` 的 `OPEN_EDITOR_EXITED`），重试策略明确为"6/7 可有限重试、8 绝不重试"。
+- **冷启动前置检查新增两条只读命令** — `doctor --ci --format json`（6 = 确定性阻塞、7 = 可重试）与 `projects verify --format json`（只检测不修复；`META_MISSING` / `GUID_DUPLICATE` 等错误级退出 6，警告退出 0），均无需 feature 开关、不修改工程；beta9+ `open` 在短观察窗内编辑器退出返回 6，观察窗外与旧版一律 0，`wait_for_health` 超时仍是真实信号。
+- **测试与构建段补齐新参数** — `test --retries` / `--rerun-failed`（beta6+）与 `--affected --since`（beta9+，需先 `--affected-compare` 量漏检率）；`build --timeout` / `UNITY_BUILD_TIMEOUT`（超时退出 6，默认关闭、无人值守必设）、json/ndjson 心跳帧、`<output>.provenance.json` 构建溯源清单；新增环境变量 `UNITY_NO_CLI_INVOKED_TELEMETRY=1`。
+- **DO NOT 清单扩充** — 新增 `projects create|new|clone|link|unlink|upgrade`（beta8+ 默认开云项目）、`templates`、`cloud` / `collab`、`unity vcs` 写操作（只读的 `status` / `diff` / `summarize` / `affected` / `conflicts` / `explain` / `providers` 除外）、`unity close` / `projects close`（不保存即退出，仅用户明确要求时可用且永不 `--force`）、`install-modules` / `editors upgrade` / `plugin install|remove|upgrade`；`unity upgrade` 更名 `self-update`；beta9+ 只读的 `unity skill show` 允许作为第二参考读取，`skill install` / `skill refresh` 仍禁止且不构成授权。
+- **`agent.md` 改名为 `AGENTS.md`，重写为纯英文、面向 AI 的紧凑常驻上下文（约 3.2K token）** — 采用 Claude Code / Codex 通用的根指令文件名，让开发本项目的 Agent 自动加载；开头指向 `unity-skills~/SKILL.md` 作为协议权威来源，结尾登记四个自定义命令的文件路径供无 slash command 的 Agent 直接读取执行；模块计数表移出（README 保留，`/skillcheck` 步骤 4 范围同步收窄）；版本锚点行改为 `| Version | x.y.z |`；并入此前只存在于会话记忆里的硬约束（GET 也走主线程队列、无鉴权/通配 CORS 为有意设计、`EditorUiScheduler.RepeatSafe` 与 USS 主题令牌、图标不用 emoji、顶栏三条设计决定、启动只打一行 Info、字库增量补字入口与校验清单、UTF-8 BOM 与 `Producer:Betsy` 尾注、永不移动已发布 tag）。`check_project_version.py` / `/updateversion` / `/skillcheck` / CONTRIBUTING / SETUP_GUIDE×2 / `ClientProcessResolver` 注释中的引用同步改名；根目录新增 `CLAUDE.md` 指向 `AGENTS.md`（并将其移出 `.gitignore`）。
+- **版本号更新** — `SkillsLogger.Version` / `package.json` / Python helper `__version__` / `AGENTS.md` 同步提升到 `2.8.4`。
+
+## [2.8.3] - 2026-09-08
+
+> **Agent 身份可信归因 + 更新页本地化修复** —— 本版两大主题：(1) 服务端不再依赖 AI 工具是否"自报身份"，改由 TCP 源端口反查客户端进程并沿父进程链归因，裸 `curl` 调用现在也能正确记成 `ClaudeCode` / `Codex` / `Antigravity` 等，且审计日志与遥测首次带上 `agent` 字段；(2) 修复更新页与多处面板在切换语言后文案停留在旧语言的缺陷，并补齐字体图集缺失的 3 个汉字。
+
+### Added
+
+- **AI Agent 进程链身份识别** — 新增 `ClientProcessResolver`：以 TCP 源端口反查客户端 PID，再沿父进程链归因到真正的 AI 工具。采用**排除表**而非"已知 Agent 名单"——排除 shell、终端宿主、系统进程、`curl`/`wget`、`npm`/`npx`/`git`/`make`/`ssh` 等中间进程后，第一个未被排除的祖先即视为 Agent，因此 Augment 等新工具无需改代码即可被识别；显示名映射表仅用于规范化（`claude` → `ClaudeCode`、`agy` → `Antigravity`、`auggie` → `Augment` 等，同时覆盖 Gemini CLI / Aider / Amp / Goose / Droid / Qwen Code 的真实二进制名），未命中时回落为进程名首字母大写而非 `Unknown`。Node/Python 等解释器托管的 CLI 会转而解析命令行，能从 `node_modules/@anthropic-ai/claude-code/cli.js` 这类路径提取 scoped 包名。**端口→PID 及该 PID 的父 PID 在 accept 线程上同步完成**（实测 1–4 毫秒，仅零 fork 系统调用）——一次性的 `curl` 进程可能在毫秒级内就退出并被回收，此后其父链再也无从查起，因此这一步必须趁连接尚存时完成；余下的祖先链（shell、解释器、Agent 本体均为长命进程）仍交由后台线程遍历。三平台实现：macOS 直接调用 libproc/`sysctl`，Linux 纯 `/proc` 解析，Windows 走 `GetExtendedTcpTable` + Toolhelp32 + PEB 命令行读取；任一环节失败即静默降级回 User-Agent 判定。`X-Agent-Id` 显式请求头仍然优先并直接短路，Unity 自检探针单独记为 `UnitySelfTest`。开关经 `EditorPrefs` 按工程隔离，默认开启。已用真实的 Claude Code、Codex CLI 与 Antigravity CLI 三方实测验证归因正确。
+- **审计日志与遥测记录 agent 字段** — `SkillsAuditLog` 的 `call` 事件（allowed / forbidden / restricted / surfaceExcluded 四种结果）新增 `agent` 字段，字段名与遥测逐字一致以便对照；审计日志窗口的记录行同步展示。身份经 ThreadStatic 请求上下文送达 `SkillRouter`，公开 API 签名不变；无法确定来源的事件（`mode_changed`、`allowlist_*`、`audit_cleared` 等）保持原样，不写入占位值。
+- **字体图集增量补字工具** — 新增 `UISkillsFontIncrementalUpdater.AddMissingGlyphs`，在既有 FontAsset 上原地追加字形而不重建，避免全量重烤丢失历史字形；任一失败路径均还原 Static 模式且不落盘。
+- **本地安装（ZIP 解压 / embedded 的 `file:` 引用）一键自更新** — 本地安装此前只能提示"请在 Package Manager 手动更新"，现与 git 安装一样支持编辑器内一键自更新：从 GitHub 归档 zip（`codeload.github.com/…/refs/tags/vX.Y.Z`）下载并解出 `SkillsForUnity` 子树到临时 staging 目录，校验 `package.json` 的 name/version 与 `Editor/`、`unity-skills~/` 目录齐备后，加锁重编译窗口做原子换目录并触发重编译；下载带可取消进度条，失败原因（网络 / 磁盘 / 校验 / 路径 / 取消）均本地化展示。**已验证**（2026-09-10，Unity 6000.3.9f1 / macOS）：以真实 v2.8.2 归档 zip 走完「解包 → 校验 → 换目录」全链路，临时目标目录内容正确替换、旧文件清除、无残留；`LocalSelfUpdateTests` 27/27，全量 EditMode 857/860（3 跳过，0 失败）。
+
+### Fixed
+
+- **更新页切换语言后文案不刷新** — 设置抽屉"包更新"行与顶部版本横幅此前把**已解析的**本地化文本当状态缓存，切换语言时不重新解析，导致状态行永久停留在执行检查时所用的语言（`RefreshLocalization` 甚至显式跳过了状态标签）。现改为存储本地化键与参数，四种状态（空闲 / 检查中 / 待更新 / 更新中）在任意时刻切换语言都会重新解析。同时修复：beta 更新目标因缓存已本地化字符串而拼出"更新到 latest beta"的混排；横幅在更新进行中切换语言会被版本提示覆盖掉进度文案；`PackageManagerHelper` 自产的两条英文提示（安装冲突、未知错误）直接透传到界面。
+- **技能详情与 CLI 检测徽标切换语言后不刷新** — 技能详情面板的描述与风险标签仅在选中技能的那一刻解析，语言切换只重建了左侧列表；Unity CLI 页的检测徽标（检测中 / 已找到 / 未找到）仅在检测完成的一次性窗口内赋值，此后轮询提前返回导致语言切换永远刷不到，除非重新触发检测。两处均已拆出可重复调用的刷新方法，且不会清空用户正在编辑的参数框或已有结果。
+- **字体图集缺失 3 个汉字** — 图集缺少 `佳` / `得` / `耗`，导致 Unity 2022（静态图集）下"Token 消耗等级"与窄面板提示缺字，Unity 6（动态字体）无此现象。图集已由 1013 字形增量补至 1016 字形，新增部分为严格超集，既有西里尔字形完好，三语文案现已零缺字。
+- **字体烘焙器的字符收集范围与安全护栏** — `UISkillsFontAssetBaker.CollectUiCharacters()` 只扫描 `Editor/Skills/Localization.cs` 与 `Editor/UI/**`，而界面文案早已迁移至 `Editor/Locales/*.json`，等于完全漏掉真实文案来源；同时硬编码排除了 `耗`。现已修正扫描范围并移除该排除项，且 `Bake()` 在执行前会比对既有图集字符集，若本次收集结果不是其超集则直接抛出异常并列出将要丢失的字符，避免误调造成不可逆的字形损毁。
+- **根 SKILL.md 字节预算测试在 Windows 检出下假红（#59）** — `RootSkillDoc_ShouldStayWithinByteBudget` 此前度量磁盘文件长度，而 Windows 上 Git 默认 `core.autocrlf=true` 会把 `PackageCache` 内的 92 个换行检出为 CRLF，同一份文档从 8185 字节膨胀到 8277 字节、超预算 85 字节，且用户无法自行修复（`PackageCache` 每次解析都会重生成）。现改为按 LF 归一化后的 UTF-8 字节数计量，各平台口径一致且与"上下文 token 成本"的本意相符；同时新增仓库根 `.gitattributes` 为 `.md/.cs/.py/.json/.uxml/.uss/.asmdef/.meta/.asset/.yml/.txt/.sh` 锁定 `eol=lf`，避免其他按字节或哈希度量文件的检查日后染上同样的平台依赖（仓库既有文件全为 LF，`git add --renormalize` 无变化）。**已验证**（2026-09-10，Unity 6000.3.9f1 / macOS）：把工作区 SKILL.md 转成 CRLF 后磁盘为 8277 字节、92 个 CR，与 issue 报告逐字一致，此时 `SkillDocumentationConsistencyTests` 9/9 通过；还原为 LF 后同样通过。
+- **进程链归因把解释器脚本当成 Agent 身份** — 8090 真机复现三类错标：(1) `python3 -c "…"` / `node -e "…"` 的内联代码被当成脚本路径扫描，代码里出现的 URL 或 `sys.path` 目录变成了 agent 名（遥测中出现 `Debug_get_errors`、`Scripts`）；(2) macOS/Linux 把 argv 用空格拼接后再切分，带空格的路径（`/tmp/My Project/tool.py`）碎成两段，首段胜出得到 `My`；(3) 解释器跑的任意脚本名（`spaced tool.py` → `Spacedtool`）被当成最终身份，走到脚本就停，不再向上找真正启动它的 Claude Code。现在内联代码标志直接判为"无身份、继续上爬"；argv 拼接对含空白元素加引号，复用既有的引号感知分词器；脚本名只作为**候选**（`WalkChainCore` 返回 Confident / Tentative 两档），走链继续寻找可信祖先——node_modules 包、`bin/` 目录下的已安装入口（npm 全局链接、pip console script）、显示名映射命中或普通非排除进程——找不到时才回落到脚本名，且候选身份只钉在叶子 pid 上、不回填到 shell 等中间祖先，避免同一 shell 后续的 curl 被贴上脚本名。同时 `Path.GetFileNameWithoutExtension` 换成手写截取（Windows/Mono 下 token 含 `<>|"` 会抛异常并让整次同步归因放弃），`language_server_` 改为前缀排除以覆盖 Codeium 语言服务器的 macOS/Linux 变体。**已验证**（2026-09-10，8090 真机）：四种调用方式（带空格路径脚本、`python3 -c`、裸 `curl`、显式请求头）以 6 秒间隔稀疏单发 8 次，遥测 8/8 归因 `ClaudeCode`（含 ms=0 的瞬时技能）；强制重编译后冷缓存的首个裸 `curl` 请求，遥测与控制台行同为 `ClaudeCode`；`ClientProcessResolverTests` 172/172，全量 EditMode 831/833（2 跳过，0 失败）。
+- **显式 `X-Agent-Id` 与进程链解析的拼写不统一** — 请求头送 `claude-code` 时原样记账，而进程链解析出的是 `ClaudeCode`，同一 agent 在控制台与 `/analytics` 里分成两行。现在显式请求头先经显示名映射折叠（`claude-code` / `claude` → `ClaudeCode`、`agy` → `Antigravity` 等），未命中映射的自定义 id 原样保留。
+
+### Changed
+
+- **遥测与审计改为落盘时绑定 agent** — 两者此前在入队时就将整行 JSON 拼定并近乎立即落盘，而技能执行通常只需 1–9 毫秒，远快于任何进程解析，导致 agent 字段被过早写死。现改为入队时仅记录源端口与兜底身份，行内容在延迟约 200 毫秒的落盘阶段构建并在此刻完成身份绑定；`FlushSync` 等需要立即落盘的读取路径不受延迟影响，也绝不等待解析结果。
+- **启动日志精简** — 正常启动/域重载从 7 行降到 1 行：`REST Server started at http://localhost:8090/ · 805 skills · <InstanceId>`。`Discovered N skills`、`[Self-Test] Starting`、两条 `[Self-Test] … -> OK`、`Auto-starting server (…)` 降为 Verbose；`[SafetyNet] … attempting recovery` 不再出现——编辑器启动与域重载都会常规经过这条兜底路径，它不是异常恢复，现改为 Verbose 级的 `[SafetyNet] Starting server (…)`。删除自检里的 8090–8100 端口预扫描及其 `Occupied ports` 警告（对本实例无意义，且每次启动串行探测 10 个端口各 500ms）；改为在 `Start()` 首选端口被占、自动回退成功时打一条 Warning `Port 8090 is in use, started on 8091 instead`（此前该情况只有 Verbose）。自检失败的 Warning、固定端口失败的 Error 保持不变，所有降级内容在 Verbose 级别仍可见。
+- **版本号更新** — `SkillsLogger.Version` / `package.json` / Python helper `__version__` / `agent.md` 同步提升到 `2.8.3`。
+
+### 已验证范围与已知限制
+
+- **三平台进程链识别均已真机验证** — macOS 与 Windows 已分别在真实 Claude Code / Codex / Antigravity 下实测归因正确（Windows 真机暴露并修复了 Toolhelp32 ANSI 入口把进程名读成 `"e"`、Codex 的 `codex-command-runner.exe` 随 curl 一同退出导致父链断裂两处问题）；Linux 走纯 `/proc` 解析，逻辑经审查，读取失败同样静默降级回 User-Agent 判定，不会比旧版更差。
+- **重编译后的首个请求也能正确归因** — 祖先链在 accept 线程同步捕获并就地遍历，域重载清空缓存后的首个请求，控制台行、审计与遥测均已实测为真实 agent。
+- **审计日志的 `agent` 字段仅对新记录生效** — 本版之前写入的历史 `call` 记录没有该字段，也不会被回填占位值。
+- **Windows 上陈旧 ppid 被复用的概率性误归因** — Toolhelp32 不校验 ppid 是否仍指向原进程，父链穿过 explorer.exe 后若其早已退出的父 pid 被无关进程复用，可能把该进程名当成 agent；概率极低，属平台固有限制。
+
+## [2.8.2] - 2026-09-08
+
+> **面板一键更新 + DontDestroyOnLoad 层级全链路可见** —— 本版两大升级：(1) 设置抽屉新增"检查更新"按钮，两步交互（先查再更），确认后在编辑器内直接完成包更新，无需打开 Package Manager；(2) `DontDestroyOnLoad` 伪场景（Play 模式）的对象此前对所有层级/查找类技能不可见，现统一接入查找器枚举，层级树、文本树、场景上下文导出与组件读写全链路覆盖；(3) 修复设置开关白色圆点垂直偏下的样式问题。
+
+### Added
+
+- **设置页"检查更新"按钮（两步交互）** — 设置抽屉 Runtime 区新增"包更新"行：点击后强制检查更新（跳过 24 小时成功缓存、失败冷却与"忽略此版本"标记）；发现新版本时按钮变为"更新到 vX.Y.Z"，再点一次即通过 `UnityEditor.PackageManager.Client.Add` 切到对应 git 引用并自动重编译生效。更新目标跟随安装来源分支：读工程 `Packages/manifest.json` 的原始依赖 URL 判定——稳定版安装更新到 GitHub 最新稳定 Release 的 tag，`#beta` 安装通过 `commits/beta` 的最新 SHA 与安装 revision 比对后更新到 beta 分支最新；本地（`file:` / embedded）安装提示不支持自动更新。三语文案齐备且未引入字库外汉字。更新横幅同步新增"直接更新"按钮，一键更到横幅所示稳定版，无需进入二级页面；本地安装下该按钮不显示。
+- **DontDestroyOnLoad 伪场景全链路可见（Play 模式）** — `GameObjectFinder` 新增 `GetDontDestroyOnLoadRoots()`（`SceneManager.sceneCount`/`GetSceneAt` 从不列出该伪场景，改为 `FindHelper.FindAll` 按场景名过滤无父对象）并接入统一根枚举，按 name/path/tag/component 的查找、建议列表与组件列表/属性读写对 DDOL 对象全部生效；`scene_get_hierarchy` 追加 DDOL 根节点子树且层级节点新增 `scene` 字段标记归属场景；`scene_get_loaded` 追加 `{name:"DontDestroyOnLoad", isPseudoScene:true}` 伪场景条目；`hierarchy_describe` 输出独立 DDOL 区段；`scene_context` / `scene_export_report` 的遍历与 `scene_summarize` 的根对象计数口径对齐（此前计数含 DDOL 但遍历漏掉它们）。`scene_unload` / `scene_set_active` 有意不涉及（该伪场景不可卸载/激活）。
+
+### Changed
+
+- **版本号更新** — `SkillsLogger.Version` / `package.json` / Python helper `__version__` / `agent.md` 同步提升到 `2.8.2`。
+
+### Fixed
+
+- **设置开关白色圆点垂直偏下** — `.server-switch` 与通用蓝色 toggle 组的 knob/checkmark 由手工 `margin-top: 1px` 对齐改为轨道 `align-items: center` flex 居中，消除 18px 轨道内高（16px 可用）手工 margin 取整造成的视觉偏移。
+
+## [2.8.1] - 2026-09-06
+
+> **元数据真实性 + Token Level 修正 + 客户端与面板小修** —— 本版为补丁级维护：(1) 对全部技能做了一次"实现写了什么、元数据就声明什么"的系统性核对——194 个记录 Undo / Workflow 快照或写盘的技能补齐 `MutatesScene` / `MutatesAssets`，并新增守卫测试防止再漂移；(2) 修复 2.8.0 引入的 Token Level 截断阈值未随档位变化的缺陷，并把当前 Token Level 设置暴露到 `/health`；(3) Python 客户端三处真实 bug（Unity 6 小版本匹配、job_logs 走重路径、`find_skills` 够不到文档默认起点）与两个新封装；(4) `RequiresInput` 声明与真实参数对齐——98 个技能的空 body 从 dryRun 报 `valid:true` 改为前置拒绝，另 32 个批量技能的令牌改为真实参数 `items`；(5) 面板切档清选中、昨日 UI 提交残留清理、内联样式收敛到 USS class，以及 CI 本地化检查的假绿盲区。
+
+### Added
+
+- **`/health` 暴露 Token Level 设置** — 新增 `summaryAutoTruncate`、`summaryPageSize`、`tokenLevel`（`minimal` / `standard` / `full` / `maximum` / `custom`）三个字段，紧邻 `surfaceProfile`；此前调用方只能从响应里的 `isTruncated` 事后反推。设置变化即时刷新快照。`references/protocol-operating-mode.md` 新增 Token Level 一节，给出四档预设与 (SurfaceProfile, SummaryAutoTruncate, SummaryPageSize) 的精确映射及分页方式。
+- **Python 客户端新封装** — `get_meta(force_refresh=False)`（`GET /skills/meta`，会话内实例级缓存）与 `execute_batch(steps, dry_run, continue_on_error, diff, mode)`（`POST /skills/batch`，body / query 键严格按服务端接受集合发送，不会触发 `UNKNOWN_PARAM`）；`find_skills` 新增 `include_schema` / `wire` 参数，可直达根 SKILL.md 的默认起点 `recommend?intent=…&includeSchema=true`。CLI 新增 `--meta`、`--batch FILE`、`--batch-mode`、`--diff`。
+- **守卫测试** — `SkillsRecordingUndoOrSnapshots_DeclareMutatesSceneOrAssets`（源码扫描：调用 Undo / WorkflowManager / AssetDatabase 写入的技能必须声明 `MutatesScene` 或 `MutatesAssets`，7 个有据豁免内联注明）、`RequiresInput_SingleTokensNameARealParameterOrGroupKey`（每个单词令牌必须是真实参数名或已登记的组键，仅 `selection` / `selectedGameObjects` 两个 Editor 选中态令牌带注释豁免）、截断阈值两条端到端用例；`SkillsNeedingAnArgument_DeclareItAndRefuseAnEmptyBodyBeforeExecuting` 用例扩充。`EditorUndoRedoTests` / `NewCapabilitiesTests` / `SkillRouterExecuteEndToEndTests` 三个测试类在 SetUp 钉 Full 档并于 TearDown 还原——此前在 guide / noSceneAuthoring 档的机器上跑会因 `gameobject_create` 被档位收回而误红。
+
+### Changed
+
+- **194 个技能补齐 `MutatesScene` / `MutatesAssets` 声明（行为变更）** — 对 838 条 `[UnitySkill]` 声明做字符串/注释感知的源码扫描，201 个候选逐一读实现后修正 194 个（28 个文件）：GameObject / Camera / Cinemachine / Component / Light / NavMesh / ProBuilder / Sample / Smart / UI / XR 等场景对象操作标 `MutatesScene`；Terrain（TerrainData 为磁盘资产）/ Timeline / Animator / Audio / Physics / Prefab / ScriptableObject / Shader / Graphics / Project / Debug 等写 `.asset` / ProjectSettings 的操作标 `MutatesAssets`；`terrain_create`、`timeline_create`、`timeline_add_animation_track` 两者皆标。全部 `_batch` 变体与单体同步。影响：`?wire=v2` 的 `flags` 不再漏报；noSceneAuthoring 档新增隐藏 `validate_fix_missing_scripts`（其余受影响分类原本已整体隐藏）。7 个豁免：`console_set_pause_on_error` / `_collapse` / `_clear_on_play`（只写 Console 窗口标志位）、`qframework_set_reskit_build_options` / `_set_editor_locale`（QFramework 自家 EditorPrefs）、`workflow_snapshot_object` / `_created`（只记录不修改）。
+- **98 个技能改为前置拒绝空 body（行为变更）** — 24 个 `RequiresInput` 语义定位令牌（`vcam` / `terrain` / `director` / `prefabInstance` / `animatorController` / `audioAsset` 等）此前既未登记为组键、字面量也对不上真实参数名，dryRun 空 body 一律回 `valid:true`；另有 66 个技能需要参数却完全未声明 `RequiresInput`（Cinemachine create_* ×7、Shader ×7、UIToolkit ×7、YooAsset ×16、Netcode ×5、Test ×3 等）。现统一在 dryRun / 执行前返回 `MISSING_PARAM` / `SEMANTIC_INVALID`：`vcam` / `prefabInstance` / `terrain` / `director` 复用既有 `gameObject` 组，`camera` / `source` / `sequencer` / `splineContainer` 登记为新组，Cinemachine 双定位符技能改为逐技能复合键（避免误拒只传 `vcamName` 的合法调用），`animatorController→controllerPath`、`audioAsset→assetPath`、`physicMaterial→materialPath`、`scenePath→sceneName`、`track→trackName` 等改为真实参数名；`selection` / `selectedGameObjects`（Editor 当前选中对象，非请求参数）改为专用语义检查。`cinemachine_impulse_generate` 的可空参数补默认值以停止 schema 误报。文档：Timeline 模块 `trackName` / `bindingObjectName` 的 Required 列改为 Yes。
+- **32 个批量技能的 `RequiresInput` 改为真实参数 `items`** — `component_add_batch` 等此前沿用单体的 `gameObject` 令牌，而批量方法唯一参数是 `items`；改后 schema `required` 与 dryRun 对齐，`BatchExecutor` 既有的空 `items` 拒绝行为不变，只传 `items` 的合法调用不受影响。
+- **URP 家族无 URP stub 的 `MutatesScene` / `MutatesAssets` 与真实现对齐** — Decal ×5、PostProcess ×8、URP ×4、Volume ×7 的 stub 声明补齐同名真实现已有的标志，无 URP 工程（含干净 CI）下元数据与有 URP 时逐字一致；否则新守卫测试在 CI 清洁工程必红。
+- **面板：切换 Surface Profile / Token Level 后清除失效选中** — 被新档位隐藏的技能不再残留在详情栏并显示 Run 按钮（服务端本就会拒绝，此处消除误导）；普通搜索过滤不受影响。
+- **面板：C# 内联样式收敛到 USS class** — 新增 `.is-hidden` 工具类与 `UiVisibility.SetVisible/IsVisible` 扩展，约 34 处 `style.display` / 固定布局常量改为 class 切换或共享 class（`.built-row`、`.built-card`、`.pending-row__*`、`.allowlist-row` 等），约 9 处与 USS 重复的死写入直接删除；UXML 中内联 `display:none` 统一迁为 `is-hidden`，避免内联样式压过 class。保留 13 处真正运行时计算的写入（字体资产、Tab 宽度、数据驱动 flexGrow、运行时贴图）与 4 处两阶段滑入动画。
+- **面板：昨日 topbar 提交残留清理** — 删除已成空操作的 `ApplySettingsIcon`（齿轮已是 UXML 矢量几何）；`narrow_screen_tip` 的 💡 运行时剥离死代码移除；窄屏下权限徽章为右上角齿轮让位的 `margin-right` 改为 `--topbar-settings-reserve` USS 变量并双向注释。
+- **删除 27 个无引用本地化键（三语同步，1086 → 1059）** — 旧 CLI 抽屉 / 服务器状态 / 技能测试 UI 的遗物（`execute_skill`、`stop_server`、`tab_permissions`、`skills_tag_async` 等）；`start_server`、`surface_profile`、`surface_profile_hidden_count_fmt` 因测试直接引用而保留。
+- **`PlayCaptureService` 参数校验先于编辑器忙检查** — `durationSeconds` / `maxErrors` 越界现在在 Play Mode / 编译中 / 已有任务检查之前就返回，不再因编辑器繁忙而延迟暴露请求本身的错误。
+- **版本号更新** — `SkillsLogger.Version` / `package.json` / Python helper `__version__` / `agent.md` 同步提升到 `2.8.1`。
+
+### Fixed
+
+- **Token Level 自动截断阈值未随档位变化** — `SkillRouter` 的触发条件硬编码"超过 10 项"，而 2.8.0 已把页大小做成 Minimal=5 / Standard=10 / Full=20：Minimal 档下 6–10 项数组原样全返（最省 token 的档位恰好失效），Full 档下 11–20 项被包上 `isTruncated` 元数据却一项未少。现阈值与 `SummaryPageSize` 同源。
+- **Python `_version_matches` 丢弃 Unity 6 小版本** — `set_unity_version("6.2")` 此前等同于"任意 6000.x"，多实例场景会静默路由到 6000.1 项目；现仅裸 `"6"` 通配，`"6.N"` 精确到 `6000.N.` 前缀。
+- **Python `get_job_logs` 走主线程重路径** — 改为服务端既有的轻量 `GET /jobs/{id}/logs?limit=N`，与 `get_job` / `get_job_progress` 一致；`skills/batch/SKILL.md` 的 `job_logs` 节补上轻路由交叉引用。
+- **7 个导入设置技能的 `RequiresInput` 幽灵令牌** — `texture_/model_/audio_{set,get}_import_settings` 声明的 `textureAsset` / `modelAsset` / `audioAsset` 既非真实参数也非组键，空 body 的 dryRun 报 `valid:true`；统一改为真实参数 `assetPath`。
+- **`check_locales.py` 假绿盲区** — 旧正则只匹配 `Get("k")` 单参字面量，三元表达式 `Get(c ? "a" : "b")`、格式化重载 `Get("k", args)` 与 `TryGet` / `Has` 全部漏检，键被改名后 CI 依旧通过；改为括号平衡的参数提取，现识别 352 处引用并在 CI 日志打印覆盖数。
+- **`Localization.cs` 直调 `Debug.LogError`** — 改走 `SkillsLogger.LogError`，符合日志硬约束。
+- **`docs/SETUP_GUIDE(_CN).md` 过期** — 指定版本安装示例从 `#v1.6.8` 更新到当前版本；模块计数英文 "48 + 23"、中文 "49 + 20" 均改为 54 REST + 28 advisory = 82、805 技能。
+
+## [2.8.0] - 2026-08-30
+
+> **JSON 本地化解耦 + 多 Tab 窗口与 Tab 可见性配置 + Token 级别过滤** —— 本版三大核心升级：(1) 将原 `Localization.cs` 内庞大的硬编码多语言字典解耦迁移为独立的外部 JSON 资源体系（`Locales/en.json`、`zh-CN.json`、`ru.json`，1086 词条 100% 对齐），显著缩减代码体积与编译内存开销，并新增 CI 本地化检查工具；(2) UnitySkills 窗口全面升级多 Tab 架构，新增 Tab 可见性配置（`TabVisibilitySettings`）与 Unity CLI Tab 集成；(3) 新增 Skills Token Level（Compact / Normal / Verbose）档位与 UI 滑块组件，支持快速调节与过滤技能载荷，优化 AI 上下文消耗；(4) package.json 显式声明 `com.unity.test-framework` 依赖，修复无头 CI 环境测试程序集编译。
+
+### Added
+
+- **JSON 多语言本地化体系与 CI 校验** — 新增 `SkillsForUnity/Editor/Locales/` 目录（`en.json`, `zh-CN.json`, `ru.json`，各 1086 词条完整对齐），重构 `Localization.cs` 为轻量化 JSON 运行时加载器；新增 `.github/scripts/check_locales.py` CI 检查工具与 `SkillsLocalizationTests` 自动化测试。
+- **UnitySkills 窗口多 Tab 架构与 Tab 可见性设置** — 新增 `TabVisibilitySettings` 配置与持久化机制，支持自定义控制各功能 Tab（Unity CLI、Settings 等）的展示与隐藏；新增 `UnityCliTabController` 与 `UnityCliTab.uxml` 面板集成；新增 `UnitySkillsWindowTabTests` 单元测试。
+- **Skills Token Level 载荷过滤机制** — 新增 `SkillsTokenLevel` 枚举与 `TokenLevelSliderWidget` 滑块控件，支持按 Token 预算过滤技能元数据与 schema 输出；新增 `SkillsTokenLevelTests` 测试用例。
+
+### Changed
+
+- **`Localization.cs` 架构精简** — 移除近 3,800 行硬编码字典，改由 JSON 驱动，大幅降低编辑器内存占用与启动编译耗时。
+- **UI 控制器体验重构** — 优化 `SettingsDrawerController`、`SkillsTabController`、`PendingApprovalBannerController`、`AIConfigTabController` 与 `UnityCliWindow` 的交互与状态同步。
+- **版本号更新** — `SkillsLogger.Version` / `package.json` / Python helper `__version__` / `agent.md` 同步提升到 `2.8.0`。受支持版本表（.github/SECURITY.md）同步到 2.8.x。
+
+### Fixed
+
+- **测试程序集依赖缺失** — 在 `package.json` 中补齐 `"com.unity.test-framework": "1.1.33"` 依赖，修复无头模式与纯 UPM 导入下的单元测试编译与运行问题。
+
+## [2.7.1] - 2026-08-29
+
+> **QFramework 支持 + 全仓注释英化** —— 本版两件事：(1) 新增对 [QFramework](https://github.com/liangxiegame/QFramework)（凉鞋的 Unity 框架，MIT）的双轨支持——20 个 REST 技能（`qframework` 模块）与一套源码锚定的架构设计指导（`qframework-design` advisory 模块，8 份中文文档）。QFramework 没有 UPM 包，只能以 unitypackage 或单文件形式装进 `Assets/`，因此检测完全走反射锚类型：未安装时零编译期影响、不报错，除 `qframework_get_status` 外统一返回 `MISSING_PACKAGE`；技能总数 785 → **805**，分类 53 → 54，模块文档 80 → 82（54 REST + 28 advisory）。(2) 把仓库源码注释的语言从中文切换为英文（144 个文件、约 5,420 行），并同步 `CONTRIBUTING.md` 与 `agent.md` 的注释语言规范。全部改动经无头编译（0 error / 41 既有 warning）与 641 项 EditMode 测试（0 失败）验证。
+
+### Added
+
+- **QFramework REST 模块（20 个技能）** — 架构层代码生成（Architecture / System / Model / Command / Utility / Query，含 batch 变体，同名文件拒绝覆盖）、ViewController 绑定代码生成、UIKit 面板代码生成、UIKit 项目设置读写、ResKit 的 AssetBundle 标记（幂等封装，含 batch）与标记列表、ResKit 构建选项（SimulationMode / append-hash / auto-generate-class）、AssetBundle 构建与清理、架构实现类扫描（`IArchitecture` / `ISystem` / `IModel` / `ICommand` / `IQuery` / `IController`）、QFramework 内置 API 文档特性查询、LocaleKit 编辑器语言与语言定义配置。
+- **`qframework-design` advisory 模块（8 份中文文档）** — 四层架构职责与通用规则、CQRS 与 BindableProperty、事件工具三选一与两套 IOC 容器辨析、CodeGenKit + UIKit 工作流、ResKit 资源方案、ActionKit + SingletonKit + AudioKit、数据结构类 Kit。每条规则锚定 QFramework 源码或官方 Doc.md 行号，并标注了官方教程尚未同步的破坏性变更（`RegisterSystem` / `RegisterModel` / `RegisterUtility` 自 2026-08-12 起返回注册实例而非 void）。
+- **`SkillCategory.QFramework` 与 60 条三语技能描述词条** — 新分类登记后 `GET /skills/schema?category=QFramework` 自动生效。
+
+### Changed
+
+- **源码注释语言切换为英文** — 144 个文件约 5,420 行中文注释译为英文，仅保留 7 行确有必要的中文（逐字引用中文界面文案、上游第三方中文提示串、中文关键词映射表键名）。字符串字面量中的中文属产品输出，未改动；受字体图集扫描的 `Editor/UI/**` 与 `Localization.cs` 非 ASCII 字符净减 1392、新增 0，满足"只减不增"约束。
+- **注释语言规范入册** — `.github/CONTRIBUTING.md` 的 C# 与 Python 两条 Code Style 条款改为英文注释并写明例外；`agent.md` 新增「注释语言」一节，说明该规范只约束注释、不涉及字符串字面量，并记录字体图集扫描的例外。
+- **13 处硬编码中文 API 响应文案改为英文** — 覆盖 Cinemachine 缺包与 Splines 版本提示、包安装/移除的瞬时不可用提示、Timeline 路径语义校验提示、测试脚本创建提示；与同一响应对象里既有的英文字段保持一致。三语 `L(en, zh, ru)` 本地化变体、中文意图映射字典与错误分类器关键词属功能数据，未改动。
+- **版本号更新** — `SkillsLogger.Version` / `package.json` / Python helper `__version__` / `agent.md` 同步提升到 `2.7.1`。
+
+### Fixed
+
+- **`MODE_RESTRICTED` 的 Dialog 通道 hint 中英混杂并泄露内部代号** — 发给 AI 调用方的提示原文夹带中文与内部设计代号「v1.9 方案 B」，已改写为与相邻 Panel 通道一致的纯英文表述。
+- **`.github/CONTRIBUTING.md` 功能模块计数漂移** — 该处长期写作 55，与其余全部锚点的 54 不一致，已修正。
+- **`skills/cinemachine/SKILL.md` 引用的错误文案失准** — 文档举例引用的缺包提示仍是旧的中文原文，已同步为现行英文文案。
 
 ## [2.7.0] - 2026-08-23
 

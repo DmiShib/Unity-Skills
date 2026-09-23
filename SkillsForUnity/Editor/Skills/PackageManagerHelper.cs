@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEditor;
 using UnityEditor.PackageManager;
 using UnityEditor.PackageManager.Requests;
@@ -12,7 +12,7 @@ using PkgInfo = UnityEditor.PackageManager.PackageInfo;
 namespace UnitySkills
 {
     /// <summary>
-    /// Unity Package Manager API 封装
+    /// Wrapper around the Unity Package Manager API
     /// </summary>
     [InitializeOnLoad]
     public static class PackageManagerHelper
@@ -91,7 +91,7 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 刷新已安装包列表
+        /// Refreshes the list of installed packages
         /// </summary>
         public static void RefreshPackageList(Action<bool> callback = null)
         {
@@ -103,8 +103,8 @@ namespace UnitySkills
             _isRefreshing = true;
             _currentOperation = "refresh";
             _currentPackageId = "(package_list)";
-            // 必须带上已解析的传递依赖：例如 Cinemachine 3 会间接引入 Splines，
-            // skill 仍须把它识别为已安装。
+            // Must include resolved transitive dependencies: e.g. Cinemachine 3 pulls in Splines indirectly,
+            // and the skill still needs to recognize it as installed.
             try
             {
                 _listRequest = Client.List(offlineMode: true, includeIndirectDependencies: true);
@@ -149,7 +149,7 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 检查包是否已安装
+        /// Checks whether a package is installed
         /// </summary>
         public static bool IsPackageInstalled(string packageId)
         {
@@ -159,7 +159,7 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 获取已安装版本
+        /// Gets the installed version
         /// </summary>
         public static string GetInstalledVersion(string packageId)
         {
@@ -169,11 +169,11 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 单包同步查询，用于缓存列表尚未就绪时的兜底。
-        /// <see cref="RefreshPackageList"/> 是异步的，且每次域重载后都要重来，
-        /// 因此一个会话的首次调用必然落在缓存仍为 null 的窗口里。没有这个兜底，
-        /// skill 会一边报告包已安装（安装判定由 version define 等其他途径得出），
-        /// 一边把版本返回成 null——自相矛盾的答案，还会让版本闸门静默判为 "unknown"。
+        /// Synchronous single-package query, used as a fallback while the cached list isn't ready yet.
+        /// <see cref="RefreshPackageList"/> is asynchronous and has to redo its work after every domain reload,
+        /// so the first call in a session inevitably lands in the window where the cache is still null. Without this fallback,
+        /// a skill would report the package as installed (installation is determined via other means like version defines)
+        /// while returning null for the version -- a self-contradictory answer that would also make the version gate silently resolve to "unknown".
         /// </summary>
         private static PkgInfo ResolveDirectly(string packageId)
         {
@@ -192,14 +192,22 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 安装包（异步）
+        /// Failure texts produced by this helper itself, as opposed to a message forwarded from
+        /// Unity's Package Manager. They stay English on the wire (REST callers depend on the exact
+        /// text); the editor UI matches these constants to show a localized reason instead.
+        /// </summary>
+        internal const string BusyMessage = "Another install operation is in progress";
+        internal const string UnknownErrorMessage = "Unknown error";
+
+        /// <summary>
+        /// Installs a package (async)
         /// </summary>
         public static void InstallPackage(string packageId, string version, Action<bool, string> callback)
         {
             if ((_addRequest != null && !_addRequest.IsCompleted) ||
                 (_removeRequest != null && !_removeRequest.IsCompleted))
             {
-                callback?.Invoke(false, "Another install operation is in progress");
+                callback?.Invoke(false, BusyMessage);
                 return;
             }
 
@@ -229,12 +237,12 @@ namespace UnitySkills
             }
             else
             {
-                cb?.Invoke(false, _addRequest.Error?.message ?? "Unknown error");
+                cb?.Invoke(false, _addRequest.Error?.message ?? UnknownErrorMessage);
             }
         }
 
         /// <summary>
-        /// 移除包（异步）
+        /// Removes a package (async)
         /// </summary>
         public static void RemovePackage(string packageId, Action<bool, string> callback)
         {
@@ -275,7 +283,7 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 获取当前 Unity 版本推荐的 Splines 版本
+        /// Gets the recommended Splines version for the current Unity version
         /// </summary>
         public static string GetRecommendedSplinesVersion()
         {
@@ -287,7 +295,7 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 安装 Splines 包
+        /// Installs the Splines package
         /// </summary>
         public static void InstallSplines(Action<bool, string> callback)
         {
@@ -295,13 +303,13 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 安装 Cinemachine（自动处理依赖）
+        /// Installs Cinemachine (automatically handles dependencies)
         /// </summary>
         public static void InstallCinemachine(bool useVersion3, Action<bool, string> callback)
         {
             if (useVersion3)
             {
-                // CM3 需要先安装 Splines
+                // CM3 requires Splines to be installed first
                 if (!IsPackageInstalled(SplinesPackageId))
                 {
                     InstallPackage(SplinesPackageId, GetRecommendedSplinesVersion(), (success, msg) =>
@@ -324,7 +332,7 @@ namespace UnitySkills
         }
 
         /// <summary>
-        /// 获取 Cinemachine 安装状态
+        /// Gets the Cinemachine installation status
         /// </summary>
         public static (bool installed, string version, bool isVersion3) GetCinemachineStatus()
         {
@@ -337,6 +345,114 @@ namespace UnitySkills
         }
 
         private const string PackageName = "com.besty.unity-skills";
+
+        internal enum SelfInstallKind { Stable, Beta, Local, Unsupported }
+
+        private const string SelfGitUrl = "https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity";
+
+        /// <summary>
+        /// Classifies a raw dependency spec from the manifest. Pure function so the mapping is
+        /// testable without touching the file system: null/blank spec (embedded package) and
+        /// non-git specs (file:, local path) => Local; git URL with "#beta" => Beta; any other
+        /// git URL => Stable.
+        /// </summary>
+        internal static SelfInstallKind ClassifySpec(string spec)
+        {
+            if (string.IsNullOrWhiteSpace(spec))
+                return SelfInstallKind.Local;
+
+            if (!spec.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                return SelfInstallKind.Local;
+
+            var hashIndex = spec.IndexOf('#');
+            var fragment = hashIndex >= 0 ? spec.Substring(hashIndex + 1).Trim() : string.Empty;
+            return string.Equals(fragment, "beta", StringComparison.OrdinalIgnoreCase)
+                ? SelfInstallKind.Beta
+                : SelfInstallKind.Stable;
+        }
+
+        /// <summary>
+        /// Detects how this package was installed by reading the raw dependency spec from the
+        /// project manifest -- PackageInfo does not preserve the original branch fragment.
+        /// Spec classification is delegated to <see cref="ClassifySpec"/>; a missing dependency
+        /// entry means the package is embedded => Local. Unsupported is reserved for paths where
+        /// the manifest is missing or cannot be parsed.
+        /// </summary>
+        internal static SelfInstallKind DetectSelfInstallKind()
+        {
+            try
+            {
+                var manifestPath = Path.Combine(Application.dataPath, "..", "Packages", "manifest.json");
+                if (!File.Exists(manifestPath)) return SelfInstallKind.Unsupported;
+
+                var json = JObject.Parse(File.ReadAllText(manifestPath));
+                var dependencies = json["dependencies"] as JObject;
+                if (dependencies == null) return SelfInstallKind.Unsupported;
+
+                var token = dependencies[PackageName];
+                if (token == null) return SelfInstallKind.Local;
+
+                return ClassifySpec(token.Value<string>());
+            }
+            catch
+            {
+                return SelfInstallKind.Unsupported;
+            }
+        }
+
+        /// <summary>
+        /// Resolves the on-disk root of this package for in-place self-update. PackageInfo does not
+        /// expose resolvedPath for embedded packages, hence the FindForAssetPath fallback. Paths
+        /// under Library/PackageCache are rejected: they are read-only cache copies that a resolve
+        /// would overwrite, silently losing the update.
+        /// </summary>
+        internal static bool TryGetSelfPackageRoot(out string path)
+        {
+            path = null;
+            try
+            {
+                var resolved = PkgInfo.FindForAssembly(typeof(PackageManagerHelper).Assembly)?.resolvedPath
+                    ?? PkgInfo.FindForAssetPath($"Packages/{PackageName}")?.resolvedPath;
+                if (string.IsNullOrEmpty(resolved)) return false;
+
+                var normalized = Path.GetFullPath(resolved).Replace('\\', '/');
+                if (normalized.Contains("/Library/PackageCache/")) return false;
+
+                var packageJsonPath = Path.Combine(resolved, "package.json");
+                if (!File.Exists(packageJsonPath)) return false;
+
+                var json = JObject.Parse(File.ReadAllText(packageJsonPath));
+                if (!string.Equals(json.Value<string>("name"), PackageName, StringComparison.Ordinal))
+                    return false;
+
+                path = resolved;
+                return true;
+            }
+            catch
+            {
+                path = null;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Commit SHA of the installed package, only meaningful for git installs (null otherwise).
+        /// </summary>
+        internal static string GetSelfInstalledRevision()
+        {
+            try { return PkgInfo.FindForAssembly(typeof(PackageManagerHelper).Assembly)?.git?.revision; }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// Re-adds this package from its git URL pinned to the update target: "#v{latestVersion}"
+        /// for stable installs, "#beta" for beta installs. Triggers a domain reload on success.
+        /// </summary>
+        internal static void UpdateSelf(SelfInstallKind kind, string latestVersion, Action<bool, string> callback)
+        {
+            var fragment = kind == SelfInstallKind.Beta ? "#beta" : "#v" + latestVersion;
+            InstallPackage(SelfGitUrl + fragment, null, callback);
+        }
 
         private static void EnsureTestable()
         {
@@ -379,8 +495,8 @@ namespace UnitySkills
         private const double RetryDelaySeconds = 3.0;
 
         /// <summary>
-        /// 自动安装 Cinemachine（如果未安装）
-        /// Unity 6+ 默认 CM3，Unity 2022 及以下默认 CM2
+        /// Auto-installs Cinemachine (if not already installed)
+        /// Unity 6+ defaults to CM3, Unity 2022 and below defaults to CM2
         /// </summary>
         private static void AutoInstallCinemachineIfNeeded()
         {
